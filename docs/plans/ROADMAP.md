@@ -81,13 +81,13 @@ eder.
 - [x] FLEURS/MLAAD/Girenit metadata’sından speaker gruplarını manifest’e taşı.
 - [x] Metadata’sı olmayan Common Voice’i speaker-disjoint alt kümesinden
       açıkça dışlama seçeneği ekle.
-- [x] Common Voice dışı 11.899 kayıtla leakage-free speaker-disjoint manifest
+- [x] Common Voice dışı 11.899 kayıtla grup kimlikleri çakışmayan manifest
       üretimini ve doğrulamasını çalıştır.
 - [x] `client_id` içeren resmi Common Voice arşivinden yeniden dışa aktarım
       aracını ekle. Mozilla Data Collective arşivi indirildiğinde `--source-dir`
       ve `--require-speaker-id` ile çalışır.
 - [x] Resmi Common Voice 27.0 arşivini Mozilla Data Collective’den dışa aktar,
-      eski metadata’sız kopyayı dışarıda bırak ve tam speaker-disjoint split’i
+      eski metadata’sız kopyayı dışarıda bırak ve grup ayrımlı split’i
       üret.
 - [x] `--holdout-generator` ile TTS üreticisi-disjoint deney akışını doğrula.
 - [x] Yedi TTS üreticisi için holdout manifestlerini üret ve doğrula.
@@ -187,7 +187,7 @@ Final doğrulama özeti:
 - Train/test speaker kesişimi: `0`
 - Dev/test speaker kesişimi: `0`
 - Eksik ses dosyası: `0`
-- `validate_manifest.py --require-speaker-id --speaker-disjoint`: başarılı
+- `validate_manifest.py --require-speaker-id --speaker-disjoint`: grup kimliği kontrolü başarılı. FLEURS grupları ses örneği kimlikleridir.
 
 #### TTS üreticisi holdout dengeleme raporu
 

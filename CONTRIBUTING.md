@@ -3,8 +3,8 @@
 ## Başlamadan önce
 
 1. Küçük ve tek bir amaca odaklanan değişiklikler yapın.
-2. Veri setlerini, model ağırlıklarını, sanal ortamları veya deney çıktılarını
-   commit etmeyin.
+2. Veri setleri, manifestler, model ağırlıkları, başvuru belgeleri, sanal
+   ortamlar ve deney çıktıları çalışma alanında tutulur. Bunları commit dışı bırakın.
 3. Veri setlerinin lisans ve atıf koşullarını koruyun.
 4. Güncel kullanım ve komut değişikliklerini kök `README.md` ile ilgili
    alt README dosyalarında birlikte güncelleyin.
@@ -14,6 +14,7 @@
 ```bash
 make check
 make compile
+make test
 ```
 
 `make check` bağımlılık gerektirmeyen repo yapısı, manifest JSONL biçimi ve
@@ -21,7 +22,7 @@ Python sözdizimi kontrolünü birlikte çalıştırır. `make compile` yalnızc
 Python derleme kontrolünü tekrarlar; Make kurulu değilse aynı komutları
 doğrudan `python3` ile çalıştırabilirsiniz.
 
-Model eğitimi ve değerlendirmesi veri seti ile GPU gerektirebilir; çalıştırılan
+Model eğitimi ve değerlendirmesi veri seti ile GPU gerektirebilir. Çalıştırılan
 komutları ve kullanılan yapılandırmayı pull request açıklamasında belirtin.
 Dokümantasyon değişikliklerinde hangi akışın ve hangi platformun doğrulandığını
 ayrıca belirtin.

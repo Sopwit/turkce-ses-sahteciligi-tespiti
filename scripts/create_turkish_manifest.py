@@ -9,6 +9,8 @@ import tarfile
 from collections import defaultdict
 from pathlib import Path
 
+from project_paths import PATHS, audio_path, stored_audio_path
+
 
 SYNTHETIC_NAMES = {"mlaad", "girenit-tts-tr-synthetic", "synthetic_turkish_tts_data"}
 REAL_NAMES = {
@@ -63,6 +65,8 @@ def generator_for(path: Path, root: Path) -> str:
 def speaker_metadata(root: Path) -> dict[str, str]:
     metadata = {}
     for tsv in root.glob("FLEURS_TR/data/tr_tr/*.tsv"):
+        if tsv.name.startswith("._"):
+            continue
         with tsv.open(encoding="utf-8") as handle:
             for row in csv.reader(handle, delimiter="\t"):
                 if len(row) >= 2 and row[0] != "id":
@@ -91,24 +95,25 @@ def speaker_metadata(root: Path) -> dict[str, str]:
 
 def extract_archives(root: Path) -> None:
     for archive in root.rglob("*.tar.gz"):
+        if archive.name.startswith("._"):
+            continue
         target = archive.parent
         marker = target / f".{archive.name}.extracted"
         if marker.exists():
             continue
+        if not hasattr(tarfile, "data_filter"):
+            raise RuntimeError("Archive extraction requires an updated Python with tarfile.data_filter")
         with tarfile.open(archive) as handle:
-            target_resolved = target.resolve()
-            for member in handle.getmembers():
-                member_path = (target / member.name).resolve()
-                if member_path != target_resolved and target_resolved not in member_path.parents:
-                    raise ValueError(f"Unsafe archive member: {member.name}")
-            handle.extractall(target)
+            handle.extractall(target, filter="data")
         marker.touch()
 
 
 MAX_CLASS_RATIO = 20.0
 
 
-def rebalance_holdout_dev(records: list[dict], holdout_generator: str) -> None:
+def rebalance_holdout_dev(
+    records: list[dict], holdout_generator: str, speaker_disjoint: bool = False,
+) -> None:
     """Keep enough non-held-out minority samples in dev for reliable metrics."""
     dev_records = [record for record in records if record["split"] == "dev"]
     counts = {
@@ -132,19 +137,44 @@ def rebalance_holdout_dev(records: list[dict], holdout_generator: str) -> None:
         ),
         key=lambda record: record["path"],
     )
-    if len(candidates) < deficit:
+    if speaker_disjoint:
+        grouped = defaultdict(list)
+        for record in records:
+            grouped[record["speaker_id"]].append(record)
+        candidate_ids = {id(record) for record in candidates}
+        eligible = {
+            record["speaker_id"]: grouped[record["speaker_id"]]
+            for record in candidates
+            if all(id(item) in candidate_ids for item in grouped[record["speaker_id"]])
+        }
+        remaining = counts_in_split(records, "train", minority_label)
+        moving = []
+        for group in eligible.values():
+            if len(group) >= remaining:
+                continue
+            moving.extend(group)
+            remaining -= len(group)
+            if len(moving) >= deficit:
+                break
+    else:
+        moving = candidates[:deficit]
+    if len(moving) < deficit:
         raise SystemExit(
-            "Cannot balance holdout dev split without moving held-out generator "
-            f"records: need {deficit}, found {len(candidates)}"
+            f"Cannot balance holdout dev split with intact train groups: need {deficit}, "
+            f"found {len(moving)}"
         )
-    for record in candidates[:deficit]:
+    for record in moving:
         record["split"] = "dev"
+
+
+def counts_in_split(records: list[dict], split: str, label: int) -> int:
+    return sum(record["split"] == split and record["label"] == label for record in records)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path("dataset"))
-    parser.add_argument("--output", type=Path, default=Path("dataset/turkish_manifest.jsonl"))
+    parser.add_argument("--root", type=Path, default=PATHS["data"])
+    parser.add_argument("--output", type=Path, default=PATHS["manifests"] / "turkish_manifest.jsonl")
     parser.add_argument("--extract-archives", action="store_true")
     parser.add_argument(
         "--speaker-disjoint",
@@ -167,22 +197,26 @@ def main() -> int:
         extract_archives(args.root)
     metadata_by_path = {}
     speaker_by_filename = speaker_metadata(args.root)
-    source_manifests = (
+    source_manifests = dict.fromkeys((
+        PATHS["manifests"] / "commonvoice_tr_manifest.jsonl",
         args.root / "commonvoice_tr_manifest.jsonl",
         args.root / "commonvoice_17_tr_fixed" / "commonvoice_tr_manifest.jsonl",
         args.root / "commonvoice_27_tr_fixed" / "commonvoice_tr_manifest.jsonl",
-    )
+    ))
     for metadata_path in source_manifests:
         if not metadata_path.is_file():
             continue
         for line in metadata_path.read_text(encoding="utf-8").splitlines():
             if line:
                 item = json.loads(line)
-                metadata_by_path[str(Path(item["path"]).resolve())] = item
+                metadata_by_path[str(audio_path(item["path"], metadata_path).resolve())] = item
     records = []
     seen_paths = set()
     for audio in sorted(args.root.rglob("*.wav")):
         if any(part.startswith(".") for part in audio.parts):
+            continue
+        folder = audio.relative_to(args.root).parts[0]
+        if folder in {"kanal-varyantlari", "harici-test", "phone_channel_8k"} or folder.startswith(("real_codec_", "phone_channel_8k-")):
             continue
         source, label = source_and_label(audio)
         resolved_path = str(audio.resolve())
@@ -281,6 +315,12 @@ def main() -> int:
             raise SystemExit(
                 f"No generator matched --holdout-generator={args.holdout_generator}"
             )
+        if args.speaker_disjoint:
+            held_ids = {id(record) for record in held_out}
+            held_groups = {record["speaker_id"] for record in held_out}
+            if any(record["speaker_id"] in held_groups and id(record) not in held_ids
+                   for record in records):
+                raise SystemExit("Generator holdout would split a speaker group")
         for record in held_out:
             record["split"] = "test"
     for missing in ("dev", "test"):
@@ -294,7 +334,7 @@ def main() -> int:
                 raise SystemExit(f"Cannot create {missing} split from the discovered audio")
             candidates[-1]["split"] = missing
     if args.holdout_generator:
-        rebalance_holdout_dev(records, args.holdout_generator)
+        rebalance_holdout_dev(records, args.holdout_generator, args.speaker_disjoint)
     for split in ("dev", "test"):
         labels = {record["label"] for record in records if record["split"] == split}
         for label in {0, 1} - labels:
@@ -328,6 +368,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as handle:
         for record in records:
+            record["path"] = stored_audio_path(Path(record["path"]), args.output)
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     print(f"Wrote {len(records)} records to {args.output}")
     print("Splits:", counts)

@@ -7,11 +7,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from project_paths import PATHS
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
     "README.md",
     "CONTRIBUTING.md",
+    "project-layout.json",
     "setup-macos.sh",
     "setup-windows.ps1",
     "scripts/2209A_AASIST_kurulum_Python314.sh",
@@ -30,8 +33,9 @@ REQUIRED_DIRECTORIES = (
     "scripts",
 )
 OPTIONAL_MANIFESTS = (
-    "dataset/commonvoice_tr_manifest.jsonl",
-    "dataset/turkish_manifest.jsonl",
+    "commonvoice_tr_manifest.jsonl",
+    "turkish_manifest.jsonl",
+    "turkish_speaker_disjoint_manifest_commonvoice27.jsonl",
 )
 
 
@@ -50,7 +54,7 @@ def check_paths() -> None:
 
 def check_manifests() -> None:
     for relative in OPTIONAL_MANIFESTS:
-        path = ROOT / relative
+        path = PATHS["manifests"] / relative
         if not path.exists():
             continue
         with path.open(encoding="utf-8") as handle:
@@ -67,7 +71,10 @@ def check_manifests() -> None:
 
 def check_python_compile() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "compileall", "-q", "aasist-source", "scripts"],
+        [
+            sys.executable, "-m", "compileall", "-q", "-x", r"(^|[/\\])\._",
+            "aasist-source", "scripts",
+        ],
         cwd=ROOT,
         check=False,
     )

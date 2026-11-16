@@ -1,0 +1,20 @@
+{
+  "workspace": {
+    "raw": "02-veri/ham",
+    "data": "02-veri/islenmis",
+    "manifests": "02-veri/manifestler",
+    "channels": "02-veri/islenmis/kanal-varyantlari",
+    "weights": "03-deneyler/model-agirliklari",
+    "runs": "03-deneyler/kosular",
+    "runtime": "01-kod/ortam"
+  },
+  "standalone": {
+    "raw": "dataset",
+    "data": "dataset",
+    "manifests": "dataset",
+    "channels": "dataset",
+    "weights": "aasist-source/models/weights",
+    "runs": "experiments/turkish",
+    "runtime": "."
+  }
+}

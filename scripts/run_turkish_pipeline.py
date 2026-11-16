@@ -7,13 +7,15 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
+
+from project_paths import PATHS, ROOT
 
 
-ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "dataset" / "turkish_manifest.jsonl"
+MANIFEST = PATHS["manifests"] / "turkish_manifest.jsonl"
 MODEL_CONFIGS = {
-    "AASIST": ("aasist-source/config/AASIST.conf", "aasist-source/models/weights/AASIST.pth"),
-    "AASIST-L": ("aasist-source/config/AASIST-L.conf", "aasist-source/models/weights/AASIST-L.pth"),
+    "AASIST": ("aasist-source/config/AASIST.conf", "AASIST.pth"),
+    "AASIST-L": ("aasist-source/config/AASIST-L.conf", "AASIST-L.pth"),
     "RawNet2": ("aasist-source/config/Turkish_RawNet2.conf", None),
     "RawGAT-ST": ("aasist-source/config/Turkish_RawGATST.conf", None),
 }
@@ -37,12 +39,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", default="AASIST",
                         help="Comma-separated models, XLSR, or 'all' (default: AASIST)")
-    parser.add_argument("--manifest", type=Path, default=MANIFEST)
+    parser.add_argument("--manifest", type=Path, help="Use an existing manifest as input")
     parser.add_argument("--extract-archives", action="store_true")
     parser.add_argument("--holdout-generator",
                         help="Keep a matching TTS generator only in the test split")
     parser.add_argument("--phone-channel", action="store_true",
                         help="Train/evaluate on the generated 8 kHz G.711 manifest")
+    parser.add_argument("--run-dir", type=Path, help="Create outputs in this new directory")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
     parser.add_argument("--epochs", type=int)
@@ -51,24 +54,36 @@ def main() -> int:
     args = parser.parse_args()
 
     models = parse_models(args.models)
-    manifest = args.manifest if args.manifest.is_absolute() else ROOT / args.manifest
-    manifest_cmd = [
-        sys.executable, str(ROOT / "scripts" / "create_turkish_manifest.py"),
-        "--root", str(ROOT / "dataset"), "--output", str(manifest),
-    ]
-    if args.extract_archives:
-        manifest_cmd.append("--extract-archives")
-    if args.holdout_generator:
-        manifest_cmd.extend(["--holdout-generator", args.holdout_generator])
-    run(manifest_cmd)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+    run_dir = args.run_dir.resolve() if args.run_dir else PATHS["runs"] / run_id
+    if args.manifest:
+        if args.extract_archives or args.holdout_generator:
+            parser.error("--manifest cannot be combined with manifest generation options")
+        manifest = args.manifest.resolve()
+        if not manifest.is_file():
+            parser.error(f"Manifest not found: {manifest}")
+    else:
+        manifest = MANIFEST
+        if args.extract_archives or args.holdout_generator:
+            manifest = PATHS["manifests"] / f"{run_id}-turkish.jsonl"
+        if not manifest.is_file():
+            manifest_cmd = [
+                sys.executable, str(ROOT / "scripts" / "create_turkish_manifest.py"),
+                "--root", str(PATHS["data"]), "--output", str(manifest),
+            ]
+            if args.extract_archives:
+                manifest_cmd.append("--extract-archives")
+            if args.holdout_generator:
+                manifest_cmd.extend(["--holdout-generator", args.holdout_generator])
+            run(manifest_cmd)
 
     if args.phone_channel:
-        phone_manifest = ROOT / "dataset" / "turkish_phone_manifest.jsonl"
+        phone_manifest = PATHS["manifests"] / f"{run_id}-phone.jsonl"
         run([
             sys.executable, str(ROOT / "scripts" / "create_phone_channel_manifest.py"),
             "--input-manifest", str(manifest),
             "--output-manifest", str(phone_manifest),
-            "--output-dir", str(ROOT / "dataset" / "phone_channel_8k"),
+            "--output-dir", str(PATHS["channels"] / f"phone_channel_8k-{run_id}"),
         ])
         manifest = phone_manifest
 
@@ -79,6 +94,7 @@ def main() -> int:
     if not args.skip_verify:
         run([sys.executable, str(ROOT / "scripts" / "verify_models.py")])
 
+    run_dir.mkdir(parents=True, exist_ok=False)
     summary = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "manifest": str(manifest),
@@ -95,7 +111,7 @@ def main() -> int:
             xlsr_command = [
                 sys.executable, str(ROOT / "scripts" / "train_xlsr_turkish.py"),
                 "--manifest", str(manifest), "--device", args.device,
-                "--output", str(ROOT / "experiments" / "turkish" / "XLSR"),
+                "--output", str(run_dir / "XLSR"),
             ]
             if args.epochs is not None:
                 xlsr_command.extend(["--epochs", str(args.epochs)])
@@ -104,7 +120,7 @@ def main() -> int:
             run(xlsr_command)
             summary["runs"].append({
                 "model": model_name,
-                "output": str(ROOT / "experiments" / "turkish" / "XLSR"),
+                "output": str(run_dir / "XLSR"),
             })
             continue
         config_name, weights_name = MODEL_CONFIGS[model_name]
@@ -112,11 +128,11 @@ def main() -> int:
             sys.executable, str(ROOT / "scripts" / "train_turkish.py"),
             "--manifest", str(manifest),
             "--config", str(ROOT / config_name),
-            "--output", str(ROOT / "experiments" / "turkish" / model_name),
+            "--output", str(run_dir / model_name),
             "--device", args.device,
         ]
         if weights_name:
-            command.extend(["--weights", str(ROOT / weights_name)])
+            command.extend(["--weights", str(PATHS["weights"] / weights_name)])
         if args.epochs is not None:
             command.extend(["--epochs", str(args.epochs)])
         if args.batch_size is not None:
@@ -124,11 +140,11 @@ def main() -> int:
         run(command)
         summary["runs"].append({
             "model": model_name,
-            "output": str(ROOT / "experiments" / "turkish" / model_name),
+            "output": str(run_dir / model_name),
         })
 
     summary["finished_at"] = datetime.now(timezone.utc).isoformat()
-    summary_path = ROOT / "experiments" / "turkish" / "run_summary.json"
+    summary_path = run_dir / "run_summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"\nPipeline tamamlandı. Özet: {summary_path}")

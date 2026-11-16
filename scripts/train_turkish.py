@@ -20,7 +20,8 @@ SOURCE = ROOT / "aasist-source"
 sys.path.insert(0, str(SOURCE))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from metrics import classification_metrics
+from metrics import classification_metrics  # noqa: E402
+from project_paths import PATHS, audio_path  # noqa: E402
 
 
 def pad_random(audio: np.ndarray, length: int) -> np.ndarray:
@@ -63,6 +64,8 @@ class TurkishAudioDataset(Dataset):
 
 def load_manifest(path: Path) -> dict[str, list[dict]]:
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    for record in records:
+        record["path"] = str(audio_path(record["path"], path))
     result = {split: [record for record in records if record["split"] == split]
               for split in ("train", "dev", "test")}
     if not result["train"] or not result["dev"] or not result["test"]:
@@ -122,6 +125,7 @@ def main() -> int:
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--weights", type=Path)
+    parser.add_argument("--selection-metric", choices=("accuracy", "eer"), default="accuracy")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     args = parser.parse_args()
@@ -132,7 +136,7 @@ def main() -> int:
     config = json.loads(args.config.read_text(encoding="utf-8"))
     if args.output is None:
         architecture = config["model_config"]["architecture"]
-        args.output = ROOT / "experiments" / "turkish" / architecture
+        args.output = PATHS["runs"] / architecture
     elif not args.output.is_absolute():
         args.output = ROOT / args.output
     args.output.mkdir(parents=True, exist_ok=True)
@@ -173,10 +177,18 @@ def main() -> int:
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["optim_config"]["base_lr"],
                                   weight_decay=config["optim_config"]["weight_decay"])
     best_accuracy = -1.0
+    best_score = float("-inf")
     history = []
     for epoch in range(1, epochs + 1):
         train_loss, train_accuracy = run_epoch(model, loaders["train"], criterion, device, optimizer)
-        dev_loss, dev_accuracy = run_epoch(model, loaders["dev"], criterion, device)
+        if args.selection_metric == "eer":
+            dev_loss, dev_accuracy, dev_metrics = evaluate(model, loaders["dev"], criterion, device)
+            dev_eer = dev_metrics["eer"]
+            selection_score = -dev_eer
+        else:
+            dev_loss, dev_accuracy = run_epoch(model, loaders["dev"], criterion, device)
+            dev_eer = None
+            selection_score = dev_accuracy
         print(f"epoch={epoch:03d} train_loss={train_loss:.4f} train_acc={train_accuracy:.4f} "
               f"dev_loss={dev_loss:.4f} dev_acc={dev_accuracy:.4f}")
         history.append({
@@ -185,9 +197,11 @@ def main() -> int:
             "train_accuracy": train_accuracy,
             "dev_loss": dev_loss,
             "dev_accuracy": dev_accuracy,
+            "dev_eer": dev_eer,
         })
-        if dev_accuracy >= best_accuracy:
-            best_accuracy = dev_accuracy
+        best_accuracy = max(best_accuracy, dev_accuracy)
+        if selection_score >= best_score:
+            best_score = selection_score
             torch.save(model.state_dict(), args.output / "best.pth")
     best_weights = args.output / "best.pth"
     model.load_state_dict(torch.load(best_weights, map_location=device, weights_only=True))
@@ -206,6 +220,8 @@ def main() -> int:
         "manifest": str(args.manifest.resolve()),
         "device": str(device),
         "epochs": epochs,
+        "seed": args.seed,
+        "selection_metric": args.selection_metric,
         "batch_size": batch_size,
         "best_dev_accuracy": best_accuracy,
         "test_loss": test_loss,

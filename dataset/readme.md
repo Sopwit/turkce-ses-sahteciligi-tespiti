@@ -1,14 +1,16 @@
 # Veri setleri
 
-Bu klasör gerçek Türkçe konuşmaları, sentetik Türkçe konuşmaları ve bunlardan
-üretilen manifestleri içerir. Büyük dosyalar Git’e eklenmez; yalnızca README
+RedSprite çalışma alanındaki gerçek ve sentetik sesler `02-veri/islenmis/`,
+manifestler `02-veri/manifestler/` altında tutulur. `project_paths.py` bu yolları
+çalışma alanına göre çözümler. Büyük dosyalar Git’e eklenmez; yalnızca README
 ve küçük metadata dosyaları sürümlenir.
 
 ## Veri kaynakları
 
 | Klasör | Tür | Kullanım |
 |---|---|---|
-| `commonvoice_17_tr_fixed/` | Gerçek | İnsan konuşması |
+| `commonvoice_27_tr_fixed/` | Gerçek | RedSprite'taki konuşmacı ayrımlı deneyin insan konuşması kaynağı |
+| `commonvoice_17_tr_fixed/` | Gerçek | Eski akışın insan konuşması kaynağı |
 | `FLEURS_TR/` | Gerçek | İnsan konuşması ve değerlendirme |
 | `MLAAD/` | Sentetik | TTS üreticileri arası çeşitlilik |
 | `girenit-tts-tr-synthetic/` | Sentetik | Türkçe TTS örnekleri |
@@ -31,28 +33,34 @@ metadata dosyalarıyla dışa aktarın:
 ```bash
 python scripts/download_commonvoice_tr.py \
   --source-dir /path/to/cv-corpus-tr \
-  --output dataset/commonvoice_17_tr_fixed \
+  --output "$(python scripts/project_paths.py data)/commonvoice_17_tr_fixed" \
   --all \
   --require-speaker-id
 ```
 
 2026 Common Voice 27.0 Türkçe arşiviyle kullanılan final akış:
 
+RedSprite'ta bu akıştan üretilen manifest hazırdır:
+`turkish_speaker_disjoint_manifest_commonvoice27.jsonl`.
+Genel `turkish_manifest.jsonl` de RedSprite'taki kaynaklar üzerinden yeniden
+üretilmiştir. Aşağıdaki komutlar, Common Voice 27 ham arşivi
+ham veri kökündeki `commonvoice_27_tr_source/` altına alındığında dışa aktarımı tekrarlar.
+
 ```bash
 python scripts/download_commonvoice_tr.py \
-  --source-dir dataset/commonvoice_27_tr_source \
-  --output dataset/commonvoice_27_tr_fixed \
+  --source-dir "$(python scripts/project_paths.py raw)/commonvoice_27_tr_source" \
+  --output "$(python scripts/project_paths.py data)/commonvoice_27_tr_fixed" \
   --all \
   --require-speaker-id
 
 python scripts/create_turkish_manifest.py \
-  --root dataset \
+  --root "$(python scripts/project_paths.py data)" \
   --exclude-source commonvoice_17_tr_fixed \
   --speaker-disjoint \
-  --output dataset/turkish_speaker_disjoint_manifest_commonvoice27.jsonl
+  --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest_commonvoice27.jsonl"
 
 python scripts/validate_manifest.py \
-  dataset/turkish_speaker_disjoint_manifest_commonvoice27.jsonl \
+  "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest_commonvoice27.jsonl" \
   --require-speaker-id \
   --speaker-disjoint
 ```
@@ -60,14 +68,16 @@ python scripts/validate_manifest.py \
 Bu arşivden 64.808 kayıt WAV olarak dışa aktarılmıştır. Eski
 `commonvoice_17_tr_fixed` kopyası `client_id` içermediği için final
 speaker-disjoint manifestten çıkarılmıştır. Final manifest 76.707 kayıt içerir
-ve splitler arasında speaker kesişimi yoktur.
+ve splitler arasında tanımlı grup kimliği kesişimi yoktur. FLEURS için
+gruplama ses örneği kimliğine dayanır. FLEURS dahil tüm kaynaklarda bağımsız
+konuşmacı testi yapıldığı iddiası bu manifestle doğrulanamaz.
 
 ## Manifest üretimi
 
 ```bash
 python scripts/create_turkish_manifest.py \
-  --root dataset \
-  --output dataset/turkish_manifest.jsonl \
+  --root "$(python scripts/project_paths.py data)" \
+  --output "$(python scripts/project_paths.py manifests)/turkish_manifest.jsonl" \
   --extract-archives
 ```
 
@@ -97,9 +107,9 @@ Gerçek codec varyantları için FFmpeg gerekir:
 
 ```bash
 python scripts/create_real_codec_manifest.py \
-  --input-manifest dataset/turkish_manifest.jsonl \
-  --output-manifest dataset/turkish_opus_manifest.jsonl \
-  --output-dir dataset/real_codec_opus \
+  --input-manifest "$(python scripts/project_paths.py manifests)/turkish_manifest.jsonl" \
+  --output-manifest "$(python scripts/project_paths.py manifests)/turkish_opus_manifest.jsonl" \
+  --output-dir "$(python scripts/project_paths.py channels)/real_codec_opus" \
   --codec opus
 ```
 

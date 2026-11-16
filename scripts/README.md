@@ -32,8 +32,8 @@ python3 scripts/check_repository.py
 Önerilen sıra:
 
 ```bash
-python scripts/create_turkish_manifest.py --root dataset --extract-archives
-python scripts/validate_manifest.py dataset/turkish_manifest.jsonl
+python scripts/create_turkish_manifest.py --root "$(python scripts/project_paths.py data)" --extract-archives
+python scripts/validate_manifest.py "$(python scripts/project_paths.py manifests)/turkish_manifest.jsonl"
 python scripts/create_phone_channel_manifest.py
 ```
 
@@ -53,9 +53,9 @@ Speaker-disjoint deney için kaynak metadata ile yeniden manifest üretin:
 ```bash
 python scripts/create_turkish_manifest.py \
   --speaker-disjoint \
-  --output dataset/turkish_speaker_disjoint_manifest.jsonl
+  --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl"
 python scripts/validate_manifest.py \
-  dataset/turkish_speaker_disjoint_manifest.jsonl \
+  "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl" \
   --require-speaker-id \
   --speaker-disjoint
 ```
@@ -67,7 +67,7 @@ speaker-disjoint alt kümesi üretmek için bu kaynağı dışarıda bırakın:
 python scripts/create_turkish_manifest.py \
   --speaker-disjoint \
   --exclude-source commonvoice_17_tr_fixed \
-  --output dataset/turkish_speaker_disjoint_manifest.jsonl
+  --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl"
 ```
 
 Tam veri için Common Voice’in `client_id` içeren kaynağını Mozilla Data
@@ -82,7 +82,7 @@ Common Voice ve MLAAD örnekleri:
 python scripts/download_commonvoice_tr.py --limit 1000
 python scripts/download_commonvoice_tr.py --all
 python scripts/mlaad_tr_dilimli_indir.py --list
-python scripts/mlaad_tr_dilimli_indir.py --limit 20
+python scripts/mlaad_tr_dilimli_indir.py --model bark --limit 20
 python scripts/mlaad_tr_dilimli_indir.py --all
 ```
 
@@ -93,14 +93,14 @@ bulunmalıdır:
 ```bash
 python scripts/download_commonvoice_tr.py \
   --source-dir /path/to/cv-corpus-tr \
-  --output dataset/commonvoice_17_tr_fixed \
+  --output "$(python scripts/project_paths.py data)/commonvoice_17_tr_fixed" \
   --all \
   --require-speaker-id
 python scripts/create_turkish_manifest.py \
   --speaker-disjoint \
-  --output dataset/turkish_speaker_disjoint_manifest.jsonl
+  --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl"
 python scripts/validate_manifest.py \
-  dataset/turkish_speaker_disjoint_manifest.jsonl \
+  "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl" \
   --require-speaker-id \
   --speaker-disjoint
 ```
@@ -153,7 +153,7 @@ Tek model:
 
 ```bash
 python scripts/train_turkish.py \
-  --manifest dataset/turkish_manifest.jsonl \
+  --manifest "$(python scripts/project_paths.py manifests)/turkish_manifest.jsonl" \
   --config aasist-source/config/Turkish_RawNet2.conf \
   --device auto
 ```
@@ -162,7 +162,7 @@ python scripts/train_turkish.py \
 tekrarlanabilirliği için kullanılır. Test değerlendirmesi en iyi dev checkpoint
 üzerinde yapılır. `metrics.json` içinde EER, ROC-AUC, F1, precision, recall,
 balanced accuracy ve confusion matrix kaydedilir. Varsayılan çıktılar
-`experiments/turkish/` altındadır.
+`python scripts/project_paths.py runs` ile gösterilen dizindedir.
 
 Model doğrulama:
 
@@ -181,3 +181,53 @@ python scripts/verify_models.py --model AASIST --device mps
 
 Türkçe deneylerde eski ASVspoof akışı olan `aasist-source/main.py` yerine
 `run_turkish_pipeline.py` veya `train_turkish.py` kullanın.
+
+### Sabit Türkçe telefon kanalı deneyi
+
+`prepare_turkish_benchmark.py`, mevcut grup ayrımlı envanterden aynı süre
+aralıklarında eşleştirilmiş gerçek ve sentetik örnekler seçer. TTS
+üreticileri aile düzeyinde ayrılır. Tekrarlanabilir örnekleme ve ana
+manifesti korumak için yeni bir çıktı adı kullanın.
+
+```bash
+manifests="$(python scripts/project_paths.py manifests)"
+channels="$(python scripts/project_paths.py channels)"
+base="$manifests/turkish_channel_benchmark_v1.jsonl"
+runs="$(python scripts/project_paths.py runs)"
+weights="$(python scripts/project_paths.py weights)"
+config=aasist-source/config/AASIST-L.conf
+
+python scripts/prepare_turkish_benchmark.py \
+  --inventory "$manifests/turkish_speaker_disjoint_manifest_commonvoice27.jsonl" \
+  --output "$base"
+
+for condition in g711 opus; do
+  codec="$condition"
+  if [ "$condition" = g711 ]; then codec=g711_mulaw; fi
+  python scripts/create_real_codec_manifest.py \
+    --input-manifest "$base" --split test --codec "$codec" --workers 3 \
+    --output-dir "$channels/turkish_channel_benchmark_v1/$condition" \
+    --output-manifest "$manifests/turkish_channel_benchmark_v1_$condition.jsonl"
+done
+
+run="$runs/aasist-l-kanal-benchmark"
+python scripts/train_turkish.py --manifest "$base" --config "$config" \
+  --weights "$weights/AASIST-L.pth" --output "$run" --selection-metric eer \
+  --epochs 1 --seed 2209
+python scripts/evaluate_turkish_channels.py --manifest "$base" --config "$config" \
+  --weights "$run/best.pth" --output "$run/channel_metrics.json" \
+  --g711 "$manifests/turkish_channel_benchmark_v1_g711.jsonl" \
+  --opus "$manifests/turkish_channel_benchmark_v1_opus.jsonl"
+```
+
+Değerlendirici aynı test kimliklerini, etiketleri ve tek ağırlığı kullanır.
+Eşik yalnızca temiz doğrulama bölümünden seçilir. Harici gerçek sesler için
+`--external-real` ile gerçek etiketli test manifesti verilebilir. Örneğin
+`prepare_real_turnturk.py`, resmî ses kanallarından ve zaman tablolarından
+gerçek video görüşmesi parçaları üretir. Bunlar yanlış alarmı ölçer.
+
+Common Voice 27.0 ham arşivini yeniden dışa aktarırken mevcut veriden ayrı
+bir hedef seçin. `download_commonvoice_tr.py --source-dir ... --all
+--require-speaker-id --provenance ...` kaynak MP3 ve cümle kimliklerinin
+WAV yollarıyla eşlemesini ayrı bir JSONL dosyasına yazar. TSV başına
+yazdırılan adetleri sağlayıcı kartıyla karşılaştırın.

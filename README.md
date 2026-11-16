@@ -1,4 +1,4 @@
-# Türkçe Ses Sahteciliği Tespit Projesi
+# Türkçe Ses Sahteciliği Tespiti
 
 Türkçe konuşmalarda gerçek insan sesini yapay/sentetik sesten ayırmak için
 AASIST, RawNet2, RawGAT-ST ve XLS-R tabanlı deneyler içeren araştırma
@@ -9,7 +9,20 @@ deposudur.
 
 ## Hızlı başlangıç
 
-Komutları her zaman depo kökünde çalıştırın.
+GitHub'dan yeni bir çalışma kopyası oluşturmak için:
+
+```bash
+git clone https://github.com/Sopwit/turkce-ses-sahteciligi-tespiti.git
+cd turkce-ses-sahteciligi-tespiti
+```
+
+Kurulum ve eğitim komutlarını depo kökünden çalıştırın.
+
+RedSprite çalışma alanında bu depo `01-kod/turkce-ses-sahteciligi-tespiti/`
+altındadır. Yerel veri, ağırlık ve koşu konumları
+[`project-layout.json`](project-layout.json) ile çözümlenir. Diskin proje
+kökündeki `README.md` başvuru ve literatür klasörlerini gösterir. Tek başına
+klonlanan depoda betikler `dataset/` ve `experiments/turkish/` yollarını kullanır.
 
 ### 1. Ortamı kurun
 
@@ -17,7 +30,7 @@ macOS Apple Silicon:
 
 ```bash
 bash setup-macos.sh
-source .venv-aasist-py314/bin/activate
+source "$(python3 scripts/project_paths.py runtime)/.venv-aasist-py314/bin/activate"
 ```
 
 Windows 10/11 x64 PowerShell:
@@ -34,29 +47,40 @@ Windows’ta veri setleri de indirilecekse:
 ```
 
 Kurulum betikleri mevcut dosyaları silmez. macOS betiği Apple Silicon için
-hazırlanmıştır; Windows betiği x64 içindir. Linux için ortamı elle kurun:
+hazırlanmıştır; Windows betiği x64 içindir. Linux üzerinde Python 3.11 veya
+daha yenisiyle ortamı kurun.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r aasist-source/requirements.txt
-python -m pip install huggingface_hub
+python -m pip install -r requirements.txt
+```
+
+Linux'ta AASIST ile eğitim için başlangıç ağırlığını indirin. AASIST-L
+deneyi için ikinci komut gerekir. RawNet2 ve RawGAT-ST eğitimleri başlangıç
+ağırlığı gerektirmez.
+
+```bash
+weights_dir="$(python scripts/project_paths.py weights)"
+mkdir -p "$weights_dir"
+hf download SpeechAntiSpoofingBenchmarks/AASIST AASIST.pth --local-dir "$weights_dir"
+curl -fL https://raw.githubusercontent.com/clovaai/aasist/main/models/weights/AASIST-L.pth \
+  -o "$weights_dir/AASIST-L.pth"
 ```
 
 ### 2. Veri setlerini hazırlayın
 
 Windows `-Mode All` veri setlerini indirmeyi dener. Diğer platformlarda veri
 sağlayıcılarının lisans ve erişim koşullarına uyarak veri setlerini
-`dataset/` altına yerleştirin. Sonra manifest üretin:
+`python scripts/project_paths.py data` ile gösterilen dizine yerleştirin.
+Sonra manifest üretin.
 
 ```bash
-python scripts/create_turkish_manifest.py \
-  --root dataset \
-  --extract-archives
+python scripts/create_turkish_manifest.py --extract-archives
 ```
 
-Bu komut `dataset/turkish_manifest.jsonl` üretir. Gerçek kayıtlar `label=1`,
+Bu komut manifest dizininde `turkish_manifest.jsonl` üretir. Gerçek kayıtlar `label=1`,
 sentetik kayıtlar `label=0` olarak işaretlenir. Her split’te iki sınıfın da
 bulunması gerekir.
 
@@ -79,7 +103,6 @@ Manifest hazırlama, model doğrulama ve eğitimi tek akışta çalıştırmak i
 ```bash
 python scripts/run_turkish_pipeline.py \
   --models AASIST \
-  --extract-archives \
   --epochs 1 \
   --batch-size 4
 ```
@@ -89,6 +112,10 @@ kollarını seçebilirsiniz. İlk denemelerde düşük epoch/batch değerleri
 kullanın. Sadece manifest ve hazırlık için `--prepare-only`, model kontrolünü
 atlamak için `--skip-verify` eklenebilir.
 
+`--manifest` ile verilen mevcut dosya girdi olarak kullanılır. `--extract-archives`
+veya `--holdout-generator` seçilirse pipeline yeni bir manifest üretir. Her eğitim
+koşusu tarihli ve benzersiz bir çıktı dizini alır.
+
 Pipeline seçenekleri:
 
 ```text
@@ -97,6 +124,7 @@ Pipeline seçenekleri:
 --holdout-generator OmniVoice
 --prepare-only
 --skip-verify
+--run-dir <yeni-cikti-dizini>
 ```
 
 ## Veri ve deney akışları
@@ -104,19 +132,17 @@ Pipeline seçenekleri:
 Telefon kanalı simülasyonu:
 
 ```bash
-python scripts/create_phone_channel_manifest.py \
-  --input-manifest dataset/turkish_manifest.jsonl \
-  --output-manifest dataset/turkish_phone_manifest.jsonl
+python scripts/create_phone_channel_manifest.py
 ```
 
-Gerçek codec deneyi için FFmpeg gerekir:
+Gerçek codec deneyi için seçilen codec’i destekleyen bir FFmpeg derlemesi gerekir.
 
 ```bash
 python scripts/create_real_codec_manifest.py \
-  --input-manifest dataset/turkish_manifest.jsonl \
-  --output-manifest dataset/turkish_gsm_manifest.jsonl \
-  --output-dir dataset/real_codec_gsm \
-  --codec gsm
+  --input-manifest "$(python scripts/project_paths.py manifests)/turkish_manifest.jsonl" \
+  --output-manifest "$(python scripts/project_paths.py manifests)/turkish_opus_manifest.jsonl" \
+  --output-dir "$(python scripts/project_paths.py channels)/real_codec_opus" \
+  --codec opus
 ```
 
 Common Voice TR dışa aktarma:
@@ -130,7 +156,7 @@ MLAAD Türkçe örneklemi:
 
 ```bash
 python scripts/mlaad_tr_dilimli_indir.py --list
-python scripts/mlaad_tr_dilimli_indir.py --limit 20
+python scripts/mlaad_tr_dilimli_indir.py --model bark --limit 20
 python scripts/mlaad_tr_dilimli_indir.py --all
 ```
 
@@ -138,7 +164,7 @@ XLS-R ince ayarı:
 
 ```bash
 python scripts/train_xlsr_turkish.py \
-  --manifest dataset/turkish_manifest.jsonl \
+  --manifest "$(python scripts/project_paths.py manifests)/turkish_manifest.jsonl" \
   --epochs 3
 ```
 
@@ -150,9 +176,9 @@ Tüm scriptlerin seçenekleri ve görevleri için
 ```text
 .
 ├── aasist-source/       # Model kodu ve config dosyaları
-├── dataset/             # Yerel veri setleri ve manifestler
+├── dataset/             # Veri kaynakları ve tek başına klonlama için varsayılan yol
 ├── docs/                # Plan, günlük ve referans belgeleri
-├── experiments/         # Yerel checkpoint ve deney çıktıları
+├── experiments/         # Deney çıktı rehberi ve tek başına klonlama için varsayılan yol
 ├── scripts/             # Veri, eğitim, indirme ve doğrulama araçları
 │   └── README.md        # Ayrıntılı komut kataloğu
 ├── setup-macos.sh       # macOS giriş betiği
@@ -163,6 +189,15 @@ Tüm scriptlerin seçenekleri ve görevleri için
 Veri setleri, model ağırlıkları, sanal ortamlar ve deney çıktıları Git’e
 eklenmez. Lisans ve kullanım koşullarını her veri sağlayıcısı için ayrıca
 kontrol edin.
+
+## Lisans ve veri
+
+Model kodunun ve üçüncü taraf bileşenlerin koşulları [LICENSE](LICENSE),
+[NOTICE](NOTICE) ve [AASIST bildiriminde](aasist-source/NOTICE) yer alır.
+Eski ASVspoof akışındaki t-DCF uygulamasının lisansı CC BY-NC-SA 4.0'dır.
+Ses dosyaları, manifestler, model ağırlıkları ve başvuru evrakları RedSprite
+çalışma alanında tutulur. Her veri ve ağırlık kaynağı için sağlayıcının
+koşulları geçerlidir.
 
 ## Model ve veri sınırları
 
@@ -179,6 +214,7 @@ kontrol edin.
 ```bash
 make check
 make compile
+make test
 ```
 
 `make check` repo yapısını, manifest JSONL biçimini ve Python sözdizimini

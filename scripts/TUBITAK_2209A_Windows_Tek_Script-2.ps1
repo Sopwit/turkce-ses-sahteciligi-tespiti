@@ -3,10 +3,8 @@
 TUBITAK 2209-A | Windows 10/11 x64 | Python 3.14 | AASIST + Turkish datasets
 
 PowerShell (normal user session):
-  powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\TUBITAK_2209A_Windows_Tek_Script.ps1"
-
-Default location: Windows Desktop\Tubitak folder; it is created when missing
-(including OneDrive-redirected Desktop).
+  .\setup-windows.ps1
+  For a standalone copy, pass -Root with the desired project folder.
 Default: setup + Common Voice TR, FLEURS TR, girenit, Anilosan15, and
 20 MLAAD files per Turkish TTS model. Large optional sources are explicit:
   -MlaadFull       All Turkish MLAAD files (potentially large / slow)
@@ -28,7 +26,7 @@ Dataset use, permissions and redistribution must be reviewed separately.
 param(
     [ValidateSet('All','Setup','Datasets','MLAAD','Check')]
     [string]$Mode = 'All',
-    [string]$Root = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Tubitak'),
+    [string]$Root,
     [ValidateRange(1,10000)]
     [int]$MlaadLimit = 20,
     [switch]$MlaadFull,
@@ -44,18 +42,46 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'Continue'
+if (-not $Root) {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'setup-windows.ps1') -PathType Leaf)) {
+        throw 'Bagimsiz kurulum icin -Root ile proje klasorunu belirtin.'
+    }
+    $Root = $repoRoot
+}
 $Root = [System.IO.Path]::GetFullPath($Root)
-$Venv = Join-Path $Root '.venv-aasist-py314'
-if (-not (Test-Path $Venv) -and (Test-Path (Join-Path $Root '.venv\Scripts\python.exe'))) {
-    $Venv = Join-Path $Root '.venv'
+$SourceDir = Join-Path $Root 'aasist-source'
+$RuntimeDir = $Root
+$DataDir = Join-Path $Root 'dataset'
+$RawDir = $DataDir
+$WeightDir = Join-Path $SourceDir 'models\weights'
+$RunDir = Join-Path $Root 'experiments\turkish'
+$layoutFile = Join-Path $Root 'project-layout.json'
+$repoParent = Split-Path -Parent $Root
+if (((Split-Path -Leaf $repoParent) -eq '01-kod') -and
+    (Test-Path -LiteralPath $layoutFile -PathType Leaf)) {
+    $layout = (Get-Content -Raw -LiteralPath $layoutFile | ConvertFrom-Json).workspace
+    $baseDir = Split-Path -Parent $repoParent
+    $RuntimeDir = Join-Path $baseDir $layout.runtime
+    $DataDir = Join-Path $baseDir $layout.data
+    $RawDir = Join-Path $baseDir $layout.raw
+    $WeightDir = Join-Path $baseDir $layout.weights
+    $RunDir = Join-Path $baseDir $layout.runs
+}
+$Venv = Join-Path $RuntimeDir '.venv-aasist-win-py314'
+foreach ($legacyName in @('.venv-aasist-py314', '.venv')) {
+    $legacyVenv = Join-Path $RuntimeDir $legacyName
+    if ((-not (Test-Path -LiteralPath $Venv)) -and
+        (Test-Path -LiteralPath (Join-Path $legacyVenv 'Scripts\python.exe') -PathType Leaf) -and
+        (-not (Test-Path -LiteralPath (Join-Path $legacyVenv 'bin')))) {
+        $Venv = $legacyVenv
+        break
+    }
 }
 $Py = Join-Path $Venv 'Scripts\python.exe'
 $HF = Join-Path $Venv 'Scripts\hf.exe'
-$DataDir = Join-Path $Root 'dataset'
-$SourceDir = Join-Path $Root 'aasist-source'
-$WeightDir = Join-Path $SourceDir 'models\weights'
-$ToolDir = Join-Path $Root 'tools'
-$LogDir = Join-Path $Root 'logs'
+$ToolDir = Join-Path $RuntimeDir 'tools'
+$LogDir = Join-Path $RuntimeDir 'logs'
 $MlaadDest = Join-Path $DataDir 'MLAAD'
 $script:DatasetErrors = New-Object System.Collections.Generic.List[string]
 
@@ -100,7 +126,7 @@ function Find-Python314 {
     $pyLauncher = Find-CommandPath 'py.exe'
     if ($pyLauncher) { $candidates += ,@($pyLauncher, '-3.14') }
     $paths = @(
-        (Join-Path $Venv 'Scripts\python.exe'),
+        $Py,
         (Join-Path $env:LOCALAPPDATA 'Python\pythoncore-3.14-64\python.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python314\python.exe'),
         'C:\Program Files\Python314\python.exe',
@@ -227,7 +253,9 @@ function Ensure-HfLogin {
     }
 }
 function Download-Dataset([string]$Repo, [string]$Folder, [string]$Include = '') {
-    $target = Join-Path $DataDir $Folder
+    $dataRoot = $DataDir
+    if ($Folder -eq 'Synthetic_Turkish_TTS_Data') { $dataRoot = $RawDir }
+    $target = Join-Path $dataRoot $Folder
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $args = @('download',$Repo,'--repo-type','dataset','--local-dir',$target,'--max-workers','3')
     if ($Include) { $args += @('--include',$Include) }
@@ -346,7 +374,7 @@ function Download-Mlaad {
     Invoke-Checked $Py $args
 }
 function Download-ASR {
-    $outDir = Join-Path $DataDir 'turkic_languages_model'
+    $outDir = Join-Path $RawDir 'turkic_languages_model'
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
     $file = Join-Path $outDir 'turkic_languages_model.zip'
     if ((Test-Path $file) -and (Get-Item $file).Length -gt 1000000) {
@@ -362,10 +390,9 @@ function Write-CheckScript {
 from pathlib import Path
 import importlib
 import json
-import os
 import sys
 
-root = Path(sys.argv[1])
+root, weights_dir, data, raw = map(Path, sys.argv[1:5])
 print('=== PYTHON / MODULLER ===', flush=True)
 print('Python:', sys.version.split()[0])
 for name in ('numpy','scipy','torch','torchaudio','librosa','soundfile',
@@ -386,7 +413,7 @@ cfg = json.loads((root / 'aasist-source/config/AASIST.conf').read_text(encoding=
 for model_name in ('AASIST', 'AASIST-L'):
     cfg = json.loads((root / 'aasist-source/config' / f'{model_name}.conf').read_text(encoding='utf-8'))
     model = Model(cfg['model_config'])
-    weights = root / 'aasist-source/models/weights' / f'{model_name}.pth'
+    weights = weights_dir / f'{model_name}.pth'
     state = torch.load(weights, map_location='cpu', weights_only=True)
     model.load_state_dict(state, strict=True)
     model.eval()
@@ -406,11 +433,11 @@ if torch.cuda.is_available():
         raise
 
 print('=== VERI KUMELERI ===')
-data = root / 'dataset'
 for folder in ('girenit-tts-tr-synthetic','MLAAD','commonvoice_17_tr_fixed',
-               'FLEURS_TR','Synthetic_Turkish_TTS_Data',
+               'commonvoice_27_tr_fixed','FLEURS_TR','Synthetic_Turkish_TTS_Data',
                'turkic_languages_model'):
-    path = data / folder
+    base = raw if folder in {"Synthetic_Turkish_TTS_Data", "turkic_languages_model"} else data
+    path = base / folder
     if not path.exists():
         print(folder, 'YOK (opsiyonel olabilir)')
         continue
@@ -432,19 +459,21 @@ print('=== KONTROL TAMAMLANDI ===')
 function Run-Checks {
     if (-not (Test-Path $Py)) { throw 'Sanal ortam yok. Once -Mode Setup calistirin.' }
     $test = Write-CheckScript
-    Invoke-Checked $Py @($test,$Root)
+    Invoke-Checked $Py @($test,$Root,$WeightDir,$DataDir,$RawDir)
     $ffmpeg = Find-CommandPath 'ffmpeg.exe'
     if ($ffmpeg) {
         & $ffmpeg -version | Select-Object -First 1
     } else { Warn 'FFmpeg PATH uzerinde bulunamadi.' }
 }
 
-New-Item -ItemType Directory -Force -Path $Root,$DataDir,$WeightDir,$ToolDir,$LogDir,(Join-Path $Root 'experiments') | Out-Null
+New-Item -ItemType Directory -Force -Path $Root,$DataDir,$WeightDir,$ToolDir,$LogDir,$RunDir | Out-Null
 $env:HF_HUB_DOWNLOAD_TIMEOUT = '120'
 $env:HF_HUB_ETAG_TIMEOUT = '30'
-$env:HF_HUB_CACHE = Join-Path $Root '_hf_cache\hub'
-$env:HF_XET_CACHE = Join-Path $Root '_hf_cache\xet'
-$env:HF_ASSETS_CACHE = Join-Path $Root '_hf_cache\assets'
+$env:HF_HUB_CACHE = Join-Path $RuntimeDir '_hf_cache\hub'
+$env:HF_XET_CACHE = Join-Path $RuntimeDir '_hf_cache\xet'
+$env:HF_ASSETS_CACHE = Join-Path $RuntimeDir '_hf_cache\assets'
+$env:HF_DATASETS_CACHE = Join-Path $RuntimeDir '_hf_cache\datasets'
+$env:PIP_CACHE_DIR = Join-Path $RuntimeDir '.cache\pip'
 $transcript = Join-Path $LogDir ("kurulum_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
 $recording = $false
 try {

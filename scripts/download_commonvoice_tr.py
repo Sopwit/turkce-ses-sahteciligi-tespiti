@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from project_paths import PATHS, stored_audio_path
+
 
 def read_audio(path: Path) -> tuple[np.ndarray, int]:
     if path.suffix.casefold() in {".wav", ".flac"}:
@@ -36,6 +38,7 @@ def export_official_archive(args: argparse.Namespace) -> int:
         raise SystemExit(f"Common Voice clips klasörü bulunamadı: {clips}")
     args.output.mkdir(parents=True, exist_ok=True)
     rows = []
+    provenance = []
     split_files = {
         "train": source / "train.tsv",
         "validation": source / "dev.tsv",
@@ -44,6 +47,7 @@ def export_official_archive(args: argparse.Namespace) -> int:
     for split, metadata_path in split_files.items():
         if not metadata_path.is_file():
             raise SystemExit(f"Common Voice metadata dosyası bulunamadı: {metadata_path}")
+        before = len(rows)
         with metadata_path.open(encoding="utf-8", newline="") as handle:
             metadata = csv.DictReader(handle, delimiter="\t")
             for index, item in enumerate(metadata):
@@ -61,7 +65,7 @@ def export_official_archive(args: argparse.Namespace) -> int:
                 samples, rate = read_audio(source_audio)
                 sf.write(target, samples, rate, subtype="PCM_16")
                 row = {
-                    "path": str(target.resolve()),
+                    "path": stored_audio_path(target, args.manifest),
                     "split": split,
                     "label": 1,
                     "source": source_name,
@@ -70,12 +74,25 @@ def export_official_archive(args: argparse.Namespace) -> int:
                 if speaker_id:
                     row["speaker_id"] = speaker_id
                 rows.append(row)
-    manifest = args.output.parent / "commonvoice_tr_manifest.jsonl"
-    manifest.write_text(
+                if args.provenance:
+                    provenance.append({
+                        "source_clip": filename,
+                        "sentence_id": item.get("sentence_id", ""),
+                        "split": split,
+                        "path": stored_audio_path(target, args.provenance),
+                    })
+        print(f"{metadata_path.name}: {len(rows) - before} exported")
+    if args.provenance:
+        args.provenance.parent.mkdir(parents=True, exist_ok=True)
+        with args.provenance.open("x", encoding="utf-8") as handle:
+            for row in provenance:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    args.manifest.write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
         encoding="utf-8",
     )
-    print(f"Exported {len(rows)} Common Voice records to {manifest}")
+    print(f"Exported {len(rows)} Common Voice records to {args.manifest}")
     if args.require_speaker_id:
         print("Speaker metadata: client_id -> speaker_id")
     return 0
@@ -83,11 +100,16 @@ def export_official_archive(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=Path("dataset/commonvoice_17_tr_fixed"))
+    parser.add_argument("--output", type=Path, default=PATHS["data"] / "commonvoice_17_tr_fixed")
+    parser.add_argument("--manifest", type=Path, help="Inventory output path")
     parser.add_argument(
         "--source-dir",
         type=Path,
         help="Official Common Voice archive containing clips/ and train/dev/test.tsv",
+    )
+    parser.add_argument(
+        "--provenance", type=Path,
+        help="New JSONL sidecar retaining original clip and sentence IDs from an official archive",
     )
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--all", action="store_true", help="Export every record in each selected split")
@@ -98,6 +120,14 @@ def main() -> int:
         help="Fail if Common Voice metadata has no client_id",
     )
     args = parser.parse_args()
+    if args.manifest is None:
+        parent = PATHS["manifests"] if args.output.parent.resolve() == PATHS["data"] else args.output.parent
+        args.manifest = parent / "commonvoice_tr_manifest.jsonl"
+    if args.provenance:
+        if not args.source_dir:
+            parser.error("--provenance requires --source-dir")
+        if args.provenance.exists() or args.provenance.resolve() == args.manifest.resolve():
+            parser.error("--provenance must be a new path distinct from --manifest")
     if args.source_dir:
         return export_official_archive(args)
     try:
@@ -124,7 +154,7 @@ def main() -> int:
                 samples, rate = read_audio(Path(audio["path"]))
             sf.write(target, samples, rate, subtype="PCM_16")
             speaker_id = item.get("client_id")
-            row = {"path": str(target.resolve()), "split": split, "label": 1,
+            row = {"path": stored_audio_path(target, args.manifest), "split": split, "label": 1,
                    "source": "commonvoice_17_tr_fixed",
                    "generator": "commonvoice_17_tr_fixed"}
             if speaker_id:
@@ -135,9 +165,9 @@ def main() -> int:
                     "resmi arşiv için --source-dir kullanın"
                 )
             rows.append(row)
-    manifest = args.output.parent / "commonvoice_tr_manifest.jsonl"
-    manifest.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
-    print(f"Exported {len(rows)} Common Voice records to {manifest}")
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    args.manifest.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    print(f"Exported {len(rows)} Common Voice records to {args.manifest}")
     return 0
 
 

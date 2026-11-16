@@ -9,6 +9,8 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
+from project_paths import PATHS, audio_path, stored_audio_path
+
 
 def mulaw_roundtrip(audio: np.ndarray) -> np.ndarray:
     """Apply the standard 8-bit G.711 mu-law quantization and decode it."""
@@ -30,10 +32,10 @@ def convert(path: Path) -> np.ndarray:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-manifest", type=Path, default=Path("dataset/turkish_manifest.jsonl"))
+    parser.add_argument("--input-manifest", type=Path, default=PATHS["manifests"] / "turkish_manifest.jsonl")
     parser.add_argument("--output-manifest", type=Path,
-                        default=Path("dataset/turkish_phone_manifest.jsonl"))
-    parser.add_argument("--output-dir", type=Path, default=Path("dataset/phone_channel_8k"))
+                        default=PATHS["manifests"] / "turkish_phone_manifest.jsonl")
+    parser.add_argument("--output-dir", type=Path, default=PATHS["channels"] / "phone_channel_8k")
     parser.add_argument("--limit", type=int, help="Process only the first N records")
     args = parser.parse_args()
 
@@ -50,12 +52,12 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     converted = []
     for index, record in enumerate(records):
-        source = Path(record["path"])
+        source = audio_path(record["path"], args.input_manifest)
         target = args.output_dir / f"{index:08d}_{source.stem}.wav"
         sf.write(target, convert(source), 8000, subtype="PCM_16")
         converted.append({
             **record,
-            "path": str(target.resolve()),
+            "path": stored_audio_path(target, args.output_manifest),
             "channel": "telephone_8khz_g711_mulaw",
         })
 

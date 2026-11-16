@@ -9,11 +9,13 @@ venv/
 env/
 ENV/
 .env
+.env.*
 .python-version
 *.egg-info/
 
 # Tooling and local caches
 .DS_Store
+._*
 .idea/
 .vscode/*
 !.vscode/settings.json
@@ -78,3 +80,27 @@ aasist-source/LA.zip
 # Evaluation outputs
 *_scores*.txt
 *_t-DCF*.txt
+
+# Keep research data, office documents and download archives outside Git
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.amr
+*.parquet
+*.jsonl
+*.pdf
+*.doc
+*.docx
+*.xlsx
+*.zip
+*.tar.gz
+*.safetensors
+*.onnx
+*.pfx
+*.pem
+*.key
+
+# Local TÜBİTAK application, correspondence and deliverables
+/docs/2209-a/*
+!/docs/2209-a/README.md

@@ -4,13 +4,16 @@ Bu klasör kurulum komutlarının yerine geçmez; güncel çalıştırma akış�
 [README.md](../README.md) ve [scripts/README.md](../scripts/README.md)
 dosyalarındadır.
 
+RedSprite çalışma alanında başvuru ve raporlar `04-tubitak-2209a/`,
+literatür ve kaynak kataloğu `05-literatur/` altında tutulur.
+
 ## Klasörler
 
 ```text
 docs/
 ├── daily/       # Tarihli geliştirme kayıtları
 ├── plans/       # Yol haritası ve çalışma planları
-└── reference/   # Teknik raporlar ve resmi referanslar
+└── reference/   # Teknik belge konumları
 ```
 
 - [Günlük kayıtları](daily/)

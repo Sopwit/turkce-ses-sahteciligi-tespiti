@@ -26,14 +26,15 @@ def equal_error_rate(labels: np.ndarray, scores: np.ndarray) -> float:
     if not len(crossing):
         return float(np.min(np.maximum(false_positive_rate, false_negative_rate)))
     index = crossing[0]
-    return float((false_positive_rate[index] + false_negative_rate[index]) / 2.0)
+    step = -difference[index] / (difference[index + 1] - difference[index])
+    return float(false_positive_rate[index] + step * (false_positive_rate[index + 1] - false_positive_rate[index]))
 
 
-def classification_metrics(labels: list[int], scores: list[float]) -> dict:
+def classification_metrics(labels: list[int], scores: list[float], threshold: float = 0.5) -> dict:
     """Calculate threshold and ranking metrics for binary predictions."""
     labels_array = np.asarray(labels, dtype=np.int64)
     scores_array = np.asarray(scores, dtype=np.float64)
-    predictions = (scores_array >= 0.5).astype(np.int64)
+    predictions = (scores_array >= threshold).astype(np.int64)
     if set(labels_array.tolist()) != {0, 1}:
         raise ValueError("Metrics require both binary labels 0 and 1")
     return {

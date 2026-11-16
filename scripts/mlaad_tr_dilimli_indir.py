@@ -14,6 +14,8 @@ import sys
 import time
 from pathlib import Path
 
+from project_paths import PATHS
+
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
 
@@ -21,7 +23,7 @@ from huggingface_hub import HfApi, RepoFile, RepoFolder, hf_hub_download
 
 REPO = "mueller91/MLAAD"
 TR_ROOT = "fake/tr"
-DEFAULT_DEST = Path.home() / "Desktop/Tubitak/dataset/MLAAD"
+DEFAULT_DEST = PATHS["data"] / "MLAAD"
 
 
 def print_flush(message):

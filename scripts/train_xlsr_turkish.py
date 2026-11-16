@@ -13,8 +13,8 @@ from scipy.signal import resample_poly
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
-
-ROOT = Path(__file__).resolve().parents[1]
+from metrics import classification_metrics
+from project_paths import PATHS, audio_path
 
 
 class ManifestAudio(Dataset):
@@ -30,6 +30,8 @@ class ManifestAudio(Dataset):
         audio, rate = sf.read(record["path"], dtype="float32", always_2d=False)
         if audio.ndim == 2:
             audio = audio.mean(axis=1)
+        if not len(audio):
+            raise ValueError(f"Empty audio file: {record['path']}")
         if rate != 16000:
             audio = resample_poly(audio, 16000, rate).astype("float32")
         if len(audio) > 64000:
@@ -48,19 +50,46 @@ def collate(batch: list[dict], extractor):
     }
 
 
+def evaluate(model, loader, device, *, collect_scores=False):
+    model.eval()
+    loss_sum, correct, total = 0.0, 0, 0
+    labels, scores = [], []
+    with torch.inference_mode():
+        for batch in loader:
+            batch = {key: value.to(device) for key, value in batch.items()}
+            result = model(**batch)
+            expected = batch["labels"]
+            loss_sum += result.loss.item() * len(expected)
+            correct += (result.logits.argmax(1) == expected).sum().item()
+            total += len(expected)
+            if collect_scores:
+                labels.extend(expected.cpu().tolist())
+                scores.extend(result.logits.softmax(dim=1)[:, 1].cpu().tolist())
+    metrics = classification_metrics(labels, scores) if collect_scores else None
+    return loss_sum / total, correct / total, metrics
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--model", default="facebook/wav2vec2-xls-r-300m")
-    parser.add_argument("--output", type=Path, default=ROOT / "experiments/turkish/XLSR")
+    parser.add_argument("--output", type=Path, default=PATHS["runs"] / "XLSR")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    parser.add_argument("--seed", type=int, default=1234)
     args = parser.parse_args()
+    if args.epochs < 1 or args.batch_size < 1:
+        parser.error("--epochs and --batch-size must be positive")
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8").splitlines() if line]
+    for row in rows:
+        row["path"] = str(audio_path(row["path"], args.manifest))
     splits = {name: [row for row in rows if row["split"] == name] for name in ("train", "dev", "test")}
-    if any(not items for items in splits.values()):
-        raise SystemExit("Manifest must contain train, dev, and test records")
+    if any({row["label"] for row in items} != {0, 1} for items in splits.values()):
+        raise SystemExit("Manifest must contain both labels in train, dev, and test")
     if args.device == "auto":
         name = "cuda" if torch.cuda.is_available() else (
             "mps" if torch.backends.mps.is_available() else "cpu")
@@ -93,23 +122,28 @@ def main() -> int:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        model.eval()
-        with torch.inference_mode():
-            correct = total = 0
-            for batch in loaders["dev"]:
-                batch = {key: value.to(device) for key, value in batch.items()}
-                logits = model(**batch).logits
-                correct += (logits.argmax(1) == batch["labels"]).sum().item()
-                total += len(batch["labels"])
-        accuracy = correct / total
-        history.append({"epoch": epoch, "dev_accuracy": accuracy})
+        dev_loss, accuracy, _ = evaluate(model, loaders["dev"], device)
+        history.append({"epoch": epoch, "dev_loss": dev_loss, "dev_accuracy": accuracy})
         print(f"epoch={epoch:03d} dev_acc={accuracy:.4f}")
         if accuracy >= best:
             best = accuracy
             model.save_pretrained(args.output)
             extractor.save_pretrained(args.output)
+    del optimizer, model, loss
+    model = AutoModelForAudioClassification.from_pretrained(args.output, local_files_only=True).to(device)
+    test_loss, test_accuracy, test_metrics = evaluate(model, loaders["test"], device, collect_scores=True)
+    print(f"test_loss={test_loss:.4f} test_acc={test_accuracy:.4f}")
     (args.output / "metrics.json").write_text(json.dumps({
-        "model": args.model, "device": str(device), "best_dev_accuracy": best,
+        "model": args.model,
+        "manifest": str(args.manifest.resolve()),
+        "device": str(device),
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "seed": args.seed,
+        "best_dev_accuracy": best,
+        "test_loss": test_loss,
+        "test_accuracy": test_accuracy,
+        "test_metrics": test_metrics,
         "history": history,
     }, indent=2) + "\n", encoding="utf-8")
     return 0

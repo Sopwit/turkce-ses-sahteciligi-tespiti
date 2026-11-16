@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # TÜBİTAK 2209-A / macOS Apple Silicon / Python 3.14
-# Çalıştır: bash ~/Downloads/2209A_AASIST_kurulum_Python314.sh
-# Çalışma klasörü: ~/Desktop/Tubitak (TUBITAK_ROOT ile değiştirilebilir)
+# Depo kökünden çalıştır: bash setup-macos.sh
+# Tek dosya kullanımı: TUBITAK_ROOT=/path/to/Tubitak bash /path/to/installer.sh
 set -euo pipefail
 
-ROOT="${TUBITAK_ROOT:-$HOME/Desktop/Tubitak}"
-ENV_DIR="$ROOT/.venv-aasist-py314"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEFAULT_ROOT="$(dirname -- "$SCRIPT_DIR")"
+if [[ -f "$DEFAULT_ROOT/setup-macos.sh" ]]; then
+  ROOT="${TUBITAK_ROOT:-$DEFAULT_ROOT}"
+else
+  ROOT="${TUBITAK_ROOT:?Bağımsız kurulum için TUBITAK_ROOT proje klasörünü belirtmeli}"
+fi
 SOURCE_DIR="$ROOT/aasist-source"
-MODEL_DIR="$SOURCE_DIR/models/weights"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo 'HATA: Bu betik macOS için hazırlanmıştır.' >&2
@@ -27,7 +31,21 @@ if [[ ! -x "$PY314" ]]; then
 fi
 "$PY314" --version
 
-mkdir -p "$ROOT" "$ROOT/models" "$ROOT/experiments"
+RUNTIME_DIR="$ROOT"
+MODEL_DIR="$SOURCE_DIR/models/weights"
+RUN_DIR="$ROOT/experiments/turkish"
+if [[ -f "$ROOT/project-layout.json" ]]; then
+  RUNTIME_DIR="$("$PY314" "$ROOT/scripts/project_paths.py" runtime)"
+  MODEL_DIR="$("$PY314" "$ROOT/scripts/project_paths.py" weights)"
+  RUN_DIR="$("$PY314" "$ROOT/scripts/project_paths.py" runs)"
+fi
+ENV_DIR="$RUNTIME_DIR/.venv-aasist-py314"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$RUNTIME_DIR/.cache/pip}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$RUNTIME_DIR/_hf_cache/hub}"
+export HF_XET_CACHE="${HF_XET_CACHE:-$RUNTIME_DIR/_hf_cache/xet}"
+export HF_ASSETS_CACHE="${HF_ASSETS_CACHE:-$RUNTIME_DIR/_hf_cache/assets}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$RUNTIME_DIR/_hf_cache/datasets}"
+mkdir -p "$ROOT" "$RUNTIME_DIR" "$RUN_DIR"
 if [[ ! -e "$ENV_DIR/pyvenv.cfg" ]]; then
   if [[ -e "$ENV_DIR" ]]; then
     echo "HATA: $ENV_DIR klasörü var fakat sanal ortam değil; otomatik silinmeyecek." >&2
@@ -91,7 +109,7 @@ if [[ ! -s "$MODEL_DIR/AASIST-L.pth" ]]; then
 fi
 
 printf '\n==> Kütüphaneler, checkpoint ve CPU çıkarım testi\n'
-AASIST_ROOT="$ROOT" python - <<'PY'
+AASIST_ROOT="$ROOT" AASIST_WEIGHTS="$MODEL_DIR" python - <<'PY'
 import importlib, json, os, sys
 from pathlib import Path
 root = Path(os.environ['AASIST_ROOT'])
@@ -114,7 +132,7 @@ for model_name in ('AASIST', 'AASIST-L'):
         (root / 'aasist-source' / 'config' / f'{model_name}.conf').read_text()
     )
     model = Model(model_config['model_config'])
-    weights = root / 'aasist-source' / 'models' / 'weights' / f'{model_name}.pth'
+    weights = Path(os.environ['AASIST_WEIGHTS']) / f'{model_name}.pth'
     state = torch.load(weights, map_location='cpu', weights_only=True)
     model.load_state_dict(state, strict=True)
     model.eval()

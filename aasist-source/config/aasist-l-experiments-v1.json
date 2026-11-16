@@ -1,0 +1,20 @@
+{
+  "version": "aasist-l-experiments-v1",
+  "initial_checkpoint": "AASIST-L.pth",
+  "initial_checkpoint_sha256": "814331d088032bb4c3fa61cc014789eadeed464209dd094ab3a2dd6ffbdce27a",
+  "base_config_fingerprint": "c5197356588e41a5ee05b21e3a10800ef2c1690b6f39c1c6f2727087319d0d27",
+  "seeds": [2209, 2210, 2211],
+  "validation": "clean",
+  "arms": {
+    "M0": {"optimizer_steps": 0, "training_views": []},
+    "M1": {"optimizer_steps": 1000, "batch_size": 8, "selection_metric": "eer", "training_views": ["clean"]},
+    "M2": {"optimizer_steps": 1000, "batch_size": 8, "selection_metric": "eer", "training_views": ["clean", "real_g711_mulaw", "real_opus"]}
+  },
+  "historical": {
+    "P0": {
+      "run_id": "2026-11-15-aasist-l-kanal-baseline",
+      "epochs": 1,
+      "checkpoint_sha256": "af6b969f94eee456a60baa54af4892b422784e169425a450f3be293b2897f713"
+    }
+  }
+}

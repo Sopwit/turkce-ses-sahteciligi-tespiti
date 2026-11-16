@@ -5,6 +5,7 @@ import argparse
 import importlib
 import json
 import random
+from itertools import islice
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ SOURCE = ROOT / "aasist-source"
 sys.path.insert(0, str(SOURCE))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from aasist_protocol import config_fingerprint, channel_training_rows, experiment_settings, require_clean_development, sha256, verify_initial_weights
 from metrics import classification_metrics  # noqa: E402
 from project_paths import PATHS, audio_path  # noqa: E402
 
@@ -62,14 +64,19 @@ class TurkishAudioDataset(Dataset):
         return torch.from_numpy(audio.copy()), torch.tensor(record["label"], dtype=torch.long)
 
 
-def load_manifest(path: Path) -> dict[str, list[dict]]:
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    for record in records:
-        record["path"] = str(audio_path(record["path"], path))
-    result = {split: [record for record in records if record["split"] == split]
-              for split in ("train", "dev", "test")}
-    if not result["train"] or not result["dev"] or not result["test"]:
-        raise ValueError("Manifest must contain non-empty train, dev, and test splits")
+def load_manifest(path: Path, splits=("train", "dev", "test")) -> dict[str, list[dict]]:
+    result = {split: [] for split in splits}
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            split = record.get("split")
+            if split in result:
+                record["path"] = str(audio_path(record["path"], path))
+                result[split].append(record)
+    if any(not rows for rows in result.values()):
+        raise ValueError(f"Manifest must contain non-empty requested splits: {', '.join(splits)}")
     return result
 
 
@@ -79,11 +86,12 @@ def build_model(config: dict, device: torch.device) -> nn.Module:
     return model
 
 
-def run_epoch(model, loader, criterion, device, optimizer=None) -> tuple[float, float]:
+def run_epoch(model, loader, criterion, device, optimizer=None, max_batches=None) -> tuple[float, float]:
     training = optimizer is not None
     model.train(training)
     total_loss = correct = total = 0
-    for audio, labels in loader:
+    batches = loader if max_batches is None else islice(loader, max_batches)
+    for audio, labels in batches:
         audio, labels = audio.to(device), labels.to(device)
         with torch.set_grad_enabled(training):
             _, logits = model(audio)
@@ -125,10 +133,30 @@ def main() -> int:
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--weights", type=Path)
+    parser.add_argument("--arm", choices=("M1", "M2"),
+                        help="Apply the versioned AASIST-L fine-tuning protocol")
+    parser.add_argument("--channel-train", type=Path, action="append", default=[])
     parser.add_argument("--selection-metric", choices=("accuracy", "eer"), default="accuracy")
-    parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--seed", type=int)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     args = parser.parse_args()
+    protocol = experiment_settings() if args.arm else None
+    arm = protocol["arms"][args.arm] if protocol else None
+    if arm:
+        if args.batch_size is not None or args.epochs is not None:
+            parser.error("The experiment arm fixes batch size and optimizer steps")
+        if args.seed is None:
+            args.seed = protocol["seeds"][0]
+        if args.seed not in protocol["seeds"] or config_fingerprint(args.config) != protocol["base_config_fingerprint"]:
+            parser.error("The experiment requires a protocol seed and the original AASIST-L config")
+        verify_initial_weights(args.weights, protocol)
+        args.selection_metric = arm["selection_metric"]
+    if bool(args.channel_train) != (args.arm == "M2"):
+        parser.error("Pass channel training manifests for M2 only")
+    if args.seed is None:
+        args.seed = 1234
+    if any(value is not None and value < 1 for value in (args.batch_size, args.epochs)):
+        parser.error("Batch size and epochs must be positive")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -139,9 +167,18 @@ def main() -> int:
         args.output = PATHS["runs"] / architecture
     elif not args.output.is_absolute():
         args.output = ROOT / args.output
-    args.output.mkdir(parents=True, exist_ok=True)
+    records = load_manifest(args.manifest, ("train", "dev"))
+    if arm:
+        require_clean_development(records["train"])
+        require_clean_development(records["dev"])
+    if args.arm == "M2":
+        records["train"] = channel_training_rows(
+            records["train"], args.channel_train, args.seed, arm["training_views"][1:],
+        )
+    if any({row["label"] for row in rows} != {0, 1} for rows in records.values()):
+        parser.error("Train and dev must each contain both classes")
+    args.output.mkdir(parents=True, exist_ok=False)
     print(f"output={args.output.resolve()}")
-    records = load_manifest(args.manifest)
     if args.device == "auto":
         device_name = "cuda" if torch.cuda.is_available() else (
             "mps" if torch.backends.mps.is_available() else "cpu"
@@ -158,7 +195,7 @@ def main() -> int:
     if args.weights:
         model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
 
-    batch_size = args.batch_size or config["batch_size"]
+    batch_size = arm["batch_size"] if arm else args.batch_size or config["batch_size"]
     epochs = args.epochs or config["num_epochs"]
     samples = config["model_config"]["nb_samp"]
     loaders = {
@@ -178,9 +215,19 @@ def main() -> int:
                                   weight_decay=config["optim_config"]["weight_decay"])
     best_accuracy = -1.0
     best_score = float("-inf")
+    checkpoint_steps = 0
     history = []
+    step_budget = arm["optimizer_steps"] if arm else None
+    steps = 0
+    batches_per_epoch = len(loaders["train"])
+    if step_budget is not None:
+        epochs = (step_budget + batches_per_epoch - 1) // batches_per_epoch
     for epoch in range(1, epochs + 1):
-        train_loss, train_accuracy = run_epoch(model, loaders["train"], criterion, device, optimizer)
+        batches = batches_per_epoch if step_budget is None else min(batches_per_epoch, step_budget - steps)
+        train_loss, train_accuracy = run_epoch(
+            model, loaders["train"], criterion, device, optimizer, max_batches=batches,
+        )
+        steps += batches
         if args.selection_metric == "eer":
             dev_loss, dev_accuracy, dev_metrics = evaluate(model, loaders["dev"], criterion, device)
             dev_eer = dev_metrics["eer"]
@@ -198,35 +245,31 @@ def main() -> int:
             "dev_loss": dev_loss,
             "dev_accuracy": dev_accuracy,
             "dev_eer": dev_eer,
+            "optimizer_steps": steps,
         })
         best_accuracy = max(best_accuracy, dev_accuracy)
-        if selection_score >= best_score:
+        save_checkpoint = steps == step_budget if arm else selection_score >= best_score
+        if save_checkpoint:
             best_score = selection_score
+            checkpoint_steps = steps
             torch.save(model.state_dict(), args.output / "best.pth")
-    best_weights = args.output / "best.pth"
-    model.load_state_dict(torch.load(best_weights, map_location=device, weights_only=True))
-    test_loss, test_accuracy, test_metrics = evaluate(
-        model, loaders["test"], criterion, device
-    )
-    print(f"test_loss={test_loss:.4f} test_acc={test_accuracy:.4f}")
-    print(
-        "test_metrics="
-        f"eer={test_metrics['eer']:.4f} "
-        f"roc_auc={test_metrics['roc_auc']:.4f} "
-        f"f1={test_metrics['f1']:.4f}"
-    )
     (args.output / "metrics.json").write_text(json.dumps({
         "config": str(args.config.resolve()),
         "manifest": str(args.manifest.resolve()),
+        "manifest_sha256": sha256(args.manifest),
         "device": str(device),
         "epochs": epochs,
         "seed": args.seed,
         "selection_metric": args.selection_metric,
         "batch_size": batch_size,
         "best_dev_accuracy": best_accuracy,
-        "test_loss": test_loss,
-        "test_accuracy": test_accuracy,
-        "test_metrics": test_metrics,
+        "optimizer_steps": steps,
+        "checkpoint_optimizer_steps": checkpoint_steps,
+        "checkpoint_sha256": sha256(args.output / "best.pth"),
+        "experiment": protocol["version"] if protocol else None,
+        "arm": args.arm,
+        "initial_checkpoint_sha256": sha256(args.weights) if args.weights else None,
+        "channel_train_manifest_sha256": {str(path): sha256(path) for path in args.channel_train},
         "history": history,
     }, indent=2) + "\n", encoding="utf-8")
     return 0

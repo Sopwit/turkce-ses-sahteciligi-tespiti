@@ -1,0 +1,22 @@
+{
+  "version": "telephone-codecs-v2",
+  "pcm": {"sample_rate_hz": 8000, "channels": 1, "codec": "pcm_s16le"},
+  "encoders": {
+    "g711_mulaw": {"sample_rate_hz": 8000, "channels": 1, "codec": "pcm_mulaw", "extension": ".wav"},
+    "opus": {
+      "sample_rate_hz": 8000,
+      "channels": 1,
+      "codec": "libopus",
+      "extension": ".ogg",
+      "bitrate_bps": 12000,
+      "vbr": "on",
+      "application": "audio",
+      "frame_duration_ms": 20,
+      "cutoff_hz": 4000,
+      "packet_loss_percent": 0,
+      "fec": 0
+    },
+    "gsm": {"sample_rate_hz": 8000, "channels": 1, "codec": "gsm", "extension": ".wav"},
+    "amr_nb": {"sample_rate_hz": 8000, "channels": 1, "codec": "libopencore_amrnb", "extension": ".amr", "bitrate_bps": 12200}
+  }
+}

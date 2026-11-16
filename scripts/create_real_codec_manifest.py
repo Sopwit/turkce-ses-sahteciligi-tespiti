@@ -9,23 +9,35 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from aasist_protocol import sha256
 from project_paths import audio_path, stored_audio_path
 
 
-CODECS = {
-    "g711_mulaw": (["-ar", "8000", "-ac", "1", "-c:a", "pcm_mulaw"], ".wav"),
-    "gsm": (["-ar", "8000", "-ac", "1", "-c:a", "gsm"], ".wav"),
-    "opus": (["-ar", "8000", "-ac", "1", "-c:a", "libopus", "-b:a", "12k"], ".ogg"),
-    "amr_nb": (["-ar", "8000", "-ac", "1", "-c:a", "libopencore_amrnb", "-b:a", "12.2k"], ".amr"),
+CODEC_CONFIG = Path(__file__).resolve().parent / "config/telephone-codecs-v2.json"
+
+ENCODER_OPTIONS = {
+    "bitrate_bps": "-b:a", "vbr": "-vbr", "application": "-application",
+    "frame_duration_ms": "-frame_duration", "cutoff_hz": "-cutoff",
+    "packet_loss_percent": "-packet_loss", "fec": "-fec",
 }
 
 
+def codec_arguments(settings):
+    return [
+        "-ar", str(settings["sample_rate_hz"]), "-ac", str(settings["channels"]),
+        "-c:a", settings["codec"],
+        *(val for key, flag in ENCODER_OPTIONS.items() if key in settings
+          for val in (flag, str(settings[key]))),
+    ]
+
+
 def main() -> int:
+    config = json.loads(CODEC_CONFIG.read_text(encoding="utf-8"))
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-manifest", type=Path, required=True)
     parser.add_argument("--output-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--codec", choices=tuple(CODECS), required=True)
+    parser.add_argument("--codec", choices=tuple(config["encoders"]), required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--split", choices=("train", "dev", "test"))
     parser.add_argument("--workers", type=int, default=1)
@@ -42,8 +54,17 @@ def main() -> int:
         rows = rows[:args.limit]
     if not rows:
         parser.error("No records selected")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    codec_options, extension = CODECS[args.codec]
+    log_path = args.output_manifest.with_suffix(".codec-log.json")
+    if args.output_manifest.exists() or log_path.exists():
+        parser.error("Choose a new manifest and codec log")
+    ffmpeg_version = subprocess.run(
+        [ffmpeg, "-version"], check=True, capture_output=True, text=True,
+    ).stdout.splitlines()[0]
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    settings = config["encoders"][args.codec]
+    codec_options = codec_arguments(settings)
+    decode_options = codec_arguments(config["pcm"])
+    extension = settings["extension"]
     with tempfile.TemporaryDirectory() as temp:
         def convert(item):
             index, row = item
@@ -53,8 +74,7 @@ def main() -> int:
             source = audio_path(row["path"], args.input_manifest)
             commands = (
                 [ffmpeg, "-v", "error", "-y", "-i", str(source), *codec_options, str(encoded)],
-                [ffmpeg, "-v", "error", "-y", "-i", str(encoded), "-ar", "8000", "-ac", "1",
-                 "-c:a", "pcm_s16le", str(pending)],
+                [ffmpeg, "-v", "error", "-y", "-i", str(encoded), *decode_options, str(pending)],
             )
             try:
                 for command in commands:
@@ -68,22 +88,31 @@ def main() -> int:
                 encoded.unlink(missing_ok=True)
                 pending.unlink(missing_ok=True)
             return {**row, "path": stored_audio_path(target, args.output_manifest),
-                    "channel": f"real_{args.codec}"}
+                    "channel": f"real_{args.codec}", "codec_protocol": config["version"]}
 
         with ThreadPoolExecutor(max_workers=args.workers) as workers:
             converted = list(workers.map(convert, enumerate(rows)))
 
     args.output_manifest.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=args.output_manifest.parent, delete=False,
-    ) as handle:
-        pending_manifest = Path(handle.name)
+    with args.output_manifest.open("x", encoding="utf-8") as handle:
         for row in converted:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    try:
-        pending_manifest.replace(args.output_manifest)
-    finally:
-        pending_manifest.unlink(missing_ok=True)
+    with log_path.open("x", encoding="utf-8") as handle:
+        json.dump({
+            "protocol": config["version"],
+            "config_sha256": sha256(CODEC_CONFIG),
+            "ffmpeg_version": ffmpeg_version,
+            "channel": args.codec,
+            "encoder": settings,
+            "decoded_pcm": config["pcm"],
+            "encoder_arguments": codec_options,
+            "decoder_arguments": decode_options,
+            "split_filter": args.split,
+            "records": len(converted),
+            "input_manifest_sha256": sha256(args.input_manifest),
+            "output_manifest_sha256": sha256(args.output_manifest),
+        }, handle, indent=2)
+        handle.write("\n")
     print(f"Wrote {len(converted)} {args.codec} codec records to {args.output_manifest}")
     return 0
 

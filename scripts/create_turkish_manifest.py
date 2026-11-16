@@ -177,7 +177,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=PATHS["manifests"] / "turkish_manifest.jsonl")
     parser.add_argument("--extract-archives", action="store_true")
     parser.add_argument(
-        "--speaker-disjoint",
+        "--group-disjoint",
         action="store_true",
         help="Create deterministic group-disjoint splits; requires speaker_id metadata",
     )
@@ -240,13 +240,13 @@ def main() -> int:
         records.append(record)
     if not records:
         raise SystemExit("No WAV files found. Download/extract Turkish datasets first.")
-    if args.speaker_disjoint:
+    if args.group_disjoint:
         missing_speakers = [
             record["path"] for record in records if not record.get("speaker_id")
         ]
         if missing_speakers:
             raise SystemExit(
-                "--speaker-disjoint requires speaker_id metadata; "
+                "--group-disjoint requires speaker_id metadata; "
                 f"{len(missing_speakers)} records are missing it"
             )
         groups = defaultdict(list)
@@ -263,7 +263,7 @@ def main() -> int:
         for label_groups in by_label.values():
             if len(label_groups) < 3:
                 raise SystemExit(
-                    "Speaker-disjoint split requires at least three speaker groups "
+                    "Group-disjoint split requires at least three speaker groups "
                     "for each label"
                 )
             ordered = sorted(label_groups, key=lambda items: items[0]["speaker_id"])
@@ -295,7 +295,7 @@ def main() -> int:
                 for record in items:
                     record["split"] = split
     for label in (0, 1):
-        if args.speaker_disjoint:
+        if args.group_disjoint:
             continue
         pending = sorted(
             (record for record in records if record["label"] == label and record["split"] is None),
@@ -315,7 +315,7 @@ def main() -> int:
             raise SystemExit(
                 f"No generator matched --holdout-generator={args.holdout_generator}"
             )
-        if args.speaker_disjoint:
+        if args.group_disjoint:
             held_ids = {id(record) for record in held_out}
             held_groups = {record["speaker_id"] for record in held_out}
             if any(record["speaker_id"] in held_groups and id(record) not in held_ids
@@ -325,22 +325,22 @@ def main() -> int:
             record["split"] = "test"
     for missing in ("dev", "test"):
         if not any(record["split"] == missing for record in records):
-            if args.speaker_disjoint:
+            if args.group_disjoint:
                 raise SystemExit(
-                    f"Speaker-disjoint split could not create {missing} without leakage"
+                    f"Group-disjoint split could not create {missing} without leakage"
                 )
             candidates = [record for record in records if record["split"] == "train"]
             if not candidates:
                 raise SystemExit(f"Cannot create {missing} split from the discovered audio")
             candidates[-1]["split"] = missing
     if args.holdout_generator:
-        rebalance_holdout_dev(records, args.holdout_generator, args.speaker_disjoint)
+        rebalance_holdout_dev(records, args.holdout_generator, args.group_disjoint)
     for split in ("dev", "test"):
         labels = {record["label"] for record in records if record["split"] == split}
         for label in {0, 1} - labels:
-            if args.speaker_disjoint:
+            if args.group_disjoint:
                 raise SystemExit(
-                    f"Speaker-disjoint {split} split is missing label {label}; "
+                    f"Group-disjoint {split} split is missing label {label}; "
                     "adjust source grouping or provide more speaker groups"
                 )
             candidates = [

@@ -44,7 +44,7 @@ def main() -> int:
     parser.add_argument("--holdout-generator",
                         help="Keep a matching TTS generator only in the test split")
     parser.add_argument("--phone-channel", action="store_true",
-                        help="Train/evaluate on the generated 8 kHz G.711 manifest")
+                        help="Train and validate on an 8 kHz G.711 development view")
     parser.add_argument("--run-dir", type=Path, help="Create outputs in this new directory")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
@@ -81,7 +81,7 @@ def main() -> int:
         phone_manifest = PATHS["manifests"] / f"{run_id}-phone.jsonl"
         run([
             sys.executable, str(ROOT / "scripts" / "create_phone_channel_manifest.py"),
-            "--input-manifest", str(manifest),
+            "--input-manifest", str(manifest), "--split", "train", "--split", "dev",
             "--output-manifest", str(phone_manifest),
             "--output-dir", str(PATHS["channels"] / f"phone_channel_8k-{run_id}"),
         ])

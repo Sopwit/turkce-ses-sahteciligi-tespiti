@@ -56,18 +56,18 @@ python scripts/download_commonvoice_tr.py \
 python scripts/create_turkish_manifest.py \
   --root "$(python scripts/project_paths.py data)" \
   --exclude-source commonvoice_17_tr_fixed \
-  --speaker-disjoint \
+  --group-disjoint \
   --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest_commonvoice27.jsonl"
 
 python scripts/validate_manifest.py \
   "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest_commonvoice27.jsonl" \
   --require-speaker-id \
-  --speaker-disjoint
+  --group-disjoint
 ```
 
 Bu arşivden 64.808 kayıt WAV olarak dışa aktarılmıştır. Eski
-`commonvoice_17_tr_fixed` kopyası `client_id` içermediği için final
-speaker-disjoint manifestten çıkarılmıştır. Final manifest 76.707 kayıt içerir
+`commonvoice_17_tr_fixed` kopyası `client_id` içermediği için tarihsel grup ayrımlı
+manifestten çıkarılmıştır. Final manifest 76.707 kayıt içerir
 ve splitler arasında tanımlı grup kimliği kesişimi yoktur. FLEURS için
 gruplama ses örneği kimliğine dayanır. FLEURS dahil tüm kaynaklarda bağımsız
 konuşmacı testi yapıldığı iddiası bu manifestle doğrulanamaz.

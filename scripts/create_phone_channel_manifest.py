@@ -36,6 +36,7 @@ def main() -> int:
     parser.add_argument("--output-manifest", type=Path,
                         default=PATHS["manifests"] / "turkish_phone_manifest.jsonl")
     parser.add_argument("--output-dir", type=Path, default=PATHS["channels"] / "phone_channel_8k")
+    parser.add_argument("--split", action="append", choices=("train", "dev", "test"))
     parser.add_argument("--limit", type=int, help="Process only the first N records")
     args = parser.parse_args()
 
@@ -44,6 +45,8 @@ def main() -> int:
         for line in args.input_manifest.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    if args.split:
+        records = [record for record in records if record["split"] in args.split]
     if args.limit is not None:
         records = records[:args.limit]
     if not records:

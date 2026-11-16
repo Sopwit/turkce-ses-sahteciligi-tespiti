@@ -132,7 +132,7 @@ Exporter’ın davranışı:
 - `--require-speaker-id` kullanıldığında metadata eksikliğini açık hata olarak
   bildirir; kayıtları sessizce dışlamaz veya sahte kimlik oluşturmaz.
 - Üretilen veri, `create_turkish_manifest.py` içindeki
-  `--speaker-disjoint` akışına verilebilir.
+  `--group-disjoint` akışına verilebilir.
 
 Resmi arşiv indirildikten sonra önerilen tam akış:
 
@@ -144,20 +144,19 @@ python scripts/download_commonvoice_tr.py \
   --require-speaker-id
 
 python scripts/create_turkish_manifest.py \
-  --speaker-disjoint \
+  --group-disjoint \
   --output dataset/turkish_speaker_disjoint_manifest.jsonl
 
 python scripts/validate_manifest.py \
   dataset/turkish_speaker_disjoint_manifest.jsonl \
   --require-speaker-id \
-  --speaker-disjoint
+  --group-disjoint
 ```
 
 Aktarım aracı yerel bir Common Voice arşiv simülasyonu ile doğrulandı.
 Metadata’sız mevcut HF kaynağıyla `--require-speaker-id` çalıştırıldığında
 işlem beklenen şekilde açık hata veriyor. FLEURS, MLAAD ve Girenit kaynakları
-üzerinden üretilen 11.899 kayıtlık alt kümede ise splitler arasında speaker
-çakışması bulunmadığı doğrulandı. Tam Common Voice katkısı, Mozilla Data
+üzerinden üretilen 11.899 kayıtlık tarihsel alt kümede grup kimliği kesişimi bulunmadığı kaydedildi. Tam Common Voice katkısı, Mozilla Data
 Collective erişimi olan resmi arşivin indirilmesinden sonra tamamlanacak;
 bu dış veri erişimi gereksinimi kod veya mevcut WAV’lar üzerinden çözülebilecek
 bir eksiklik değildir.
@@ -187,7 +186,7 @@ Final doğrulama özeti:
 - Train/test speaker kesişimi: `0`
 - Dev/test speaker kesişimi: `0`
 - Eksik ses dosyası: `0`
-- `validate_manifest.py --require-speaker-id --speaker-disjoint`: grup kimliği kontrolü başarılı. FLEURS grupları ses örneği kimlikleridir.
+- `validate_manifest.py --require-speaker-id --group-disjoint`: grup kimliği kontrolü başarılı. FLEURS grupları ses örneği kimlikleridir.
 
 #### TTS üreticisi holdout dengeleme raporu
 

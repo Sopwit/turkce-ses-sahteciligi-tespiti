@@ -44,28 +44,27 @@ python scripts/create_phone_channel_manifest.py
 --output PATH
 --extract-archives
 --holdout-generator NAME
---speaker-disjoint
+--group-disjoint
 --exclude-source SOURCE
 ```
 
-Speaker-disjoint deney için kaynak metadata ile yeniden manifest üretin:
+Tarihsel grup ayrımı için kaynak metadata ile manifest üretin. Kişi düzeyi doğrulama için yeni şemanın `speaker_roles` alanı gerekir.
 
 ```bash
 python scripts/create_turkish_manifest.py \
-  --speaker-disjoint \
+  --group-disjoint \
   --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl"
 python scripts/validate_manifest.py \
   "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl" \
   --require-speaker-id \
-  --speaker-disjoint
+  --group-disjoint
 ```
 
-Mevcut Common Voice kopyasında `client_id` bulunmadığı için güvenilir
-speaker-disjoint alt kümesi üretmek için bu kaynağı dışarıda bırakın:
+Eski Common Voice 17 kopyası `client_id` içermediğinden bu grup ayrımından çıkarılabilir.
 
 ```bash
 python scripts/create_turkish_manifest.py \
-  --speaker-disjoint \
+  --group-disjoint \
   --exclude-source commonvoice_17_tr_fixed \
   --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl"
 ```
@@ -97,12 +96,12 @@ python scripts/download_commonvoice_tr.py \
   --all \
   --require-speaker-id
 python scripts/create_turkish_manifest.py \
-  --speaker-disjoint \
+  --group-disjoint \
   --output "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl"
 python scripts/validate_manifest.py \
   "$(python scripts/project_paths.py manifests)/turkish_speaker_disjoint_manifest.jsonl" \
   --require-speaker-id \
-  --speaker-disjoint
+  --group-disjoint
 ```
 
 Resmi arşiv `client_id` bilgisini korur ve exporter bunu `speaker_id` olarak
@@ -182,49 +181,56 @@ python scripts/verify_models.py --model AASIST --device mps
 Türkçe deneylerde eski ASVspoof akışı olan `aasist-source/main.py` yerine
 `run_turkish_pipeline.py` veya `train_turkish.py` kullanın.
 
-### Sabit Türkçe telefon kanalı deneyi
+## AASIST-L telefon kanalı protokolü
 
-`prepare_turkish_benchmark.py`, mevcut grup ayrımlı envanterden aynı süre
-aralıklarında eşleştirilmiş gerçek ve sentetik örnekler seçer. TTS
-üreticileri aile düzeyinde ayrılır. Tekrarlanabilir örnekleme ve ana
-manifesti korumak için yeni bir çıktı adı kullanın.
+`prepare_turkish_protocol_v2.py` kaynak manifestlerden bir envanter ve yalnız
+train/dev içeren bir geliştirme manifesti yazar. Yeni dizin seçin. FLEURS,
+geliştirme dışında tutulur. Geçmiş sonuç `P0`, orijinal AASIST-L ağırlığıyla
+yapılan eğitim içermeyen değerlendirme `M0` olarak adlandırılır.
 
 ```bash
 manifests="$(python scripts/project_paths.py manifests)"
-channels="$(python scripts/project_paths.py channels)"
-base="$manifests/turkish_channel_benchmark_v1.jsonl"
-runs="$(python scripts/project_paths.py runs)"
-weights="$(python scripts/project_paths.py weights)"
+weights="$(python scripts/project_paths.py weights)/AASIST-L.pth"
 config=aasist-source/config/AASIST-L.conf
 
-python scripts/prepare_turkish_benchmark.py \
+python scripts/prepare_turkish_protocol_v2.py \
   --inventory "$manifests/turkish_speaker_disjoint_manifest_commonvoice27.jsonl" \
-  --output "$base"
-
-for condition in g711 opus; do
-  codec="$condition"
-  if [ "$condition" = g711 ]; then codec=g711_mulaw; fi
-  python scripts/create_real_codec_manifest.py \
-    --input-manifest "$base" --split test --codec "$codec" --workers 3 \
-    --output-dir "$channels/turkish_channel_benchmark_v1/$condition" \
-    --output-manifest "$manifests/turkish_channel_benchmark_v1_$condition.jsonl"
-done
-
-run="$runs/aasist-l-kanal-benchmark"
-python scripts/train_turkish.py --manifest "$base" --config "$config" \
-  --weights "$weights/AASIST-L.pth" --output "$run" --selection-metric eer \
-  --epochs 1 --seed 2209
-python scripts/evaluate_turkish_channels.py --manifest "$base" --config "$config" \
-  --weights "$run/best.pth" --output "$run/channel_metrics.json" \
-  --g711 "$manifests/turkish_channel_benchmark_v1_g711.jsonl" \
-  --opus "$manifests/turkish_channel_benchmark_v1_opus.jsonl"
+  --development "$manifests/turkish_channel_benchmark_v1.jsonl" \
+  --common-voice "$manifests/commonvoice_tr_manifest.jsonl" \
+  --external "$manifests/fleurs_tr_harici_test_v1.jsonl" \
+  --output-dir "$manifests/protokol-v2"
+dev="$manifests/protokol-v2/turkish_channel_development_v2.jsonl"
+python scripts/validate_manifest.py "$dev" --splits train dev --exclude-source FLEURS_TR
 ```
 
-Değerlendirici aynı test kimliklerini, etiketleri ve tek ağırlığı kullanır.
-Eşik yalnızca temiz doğrulama bölümünden seçilir. Harici gerçek sesler için
-`--external-real` ile gerçek etiketli test manifesti verilebilir. Örneğin
-`prepare_real_turnturk.py`, resmî ses kanallarından ve zaman tablolarından
-gerçek video görüşmesi parçaları üretir. Bunlar yanlış alarmı ölçer.
+M1 ve M2 aynı geliştirme manifesti, tohum ve başlangıç ağırlıklarını kullanır.
+M2 için `create_real_codec_manifest.py --split train` ile yeni hedeflerde
+G.711 μ-law ve Opus eğitim görünümleri oluşturulur. Her koşu yeni çıktı dizini alır.
+
+```bash
+python scripts/train_turkish.py --manifest "$dev" --config "$config" \
+  --weights "$weights" --output "$m1_run" --arm M1 --seed 2209 --device cuda
+python scripts/train_turkish.py --manifest "$dev" --config "$config" \
+  --weights "$weights" --output "$m2_run" --arm M2 --seed 2209 --device cuda \
+  --channel-train "$g711_train" --channel-train "$opus_train"
+```
+
+Model seçimi sonrasında iki çağrıyı ayrı çalıştırın. `$heldout` yalnız bağımsız
+protokolü onaylanan test kayıtlarını, `$g711_test` ve `$opus_test` aynı
+test kimliklerinin yeni kodek kopyalarını gösterir. `$lock` ve `$result`
+yeni çıktı dosyaları olmalıdır. M0 için model orijinal ağırlık dosyasıdır.
+
+```bash
+python scripts/evaluate_turkish_channels.py --freeze --arm M1 --manifest "$dev" \
+  --config "$config" --weights "$m1_run/best.pth" --output "$lock"
+python scripts/evaluate_turkish_channels.py --lock "$lock" --arm M1 --manifest "$heldout" \
+  --config "$config" --weights "$m1_run/best.pth" \
+  --g711 "$g711_test" --opus "$opus_test" --output "$result"
+```
+
+`validate_manifest.py --speaker-disjoint` her gereken rol için doğrulanmış
+kişi kimliği arar. Mevcut V2 sentetik TTS adaylarının kişi düzeyi kökeni
+eksik olduğundan tam konuşmacı bağımsızlığı onaylanmaz.
 
 Common Voice 27.0 ham arşivini yeniden dışa aktarırken mevcut veriden ayrı
 bir hedef seçin. `download_commonvoice_tr.py --source-dir ... --all

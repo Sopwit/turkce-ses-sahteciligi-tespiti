@@ -129,6 +129,8 @@ Pipeline seçenekleri:
 
 ## Veri ve deney akışları
 
+[Kanal deneyi protokolü ve AASIST-L ön sonuçları](docs/telefon-kanali-deneyi.md).
+
 Telefon kanalı simülasyonu:
 
 ```bash
